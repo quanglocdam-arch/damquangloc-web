@@ -162,12 +162,7 @@ export default function DashboardPage() {
       <div className="min-h-screen bg-slate-900 flex items-center justify-center">
         <div className="text-center">
           <p className="text-slate-300 text-lg mb-2">Phiên đăng nhập hết hạn</p>
-          
-            href="/cdn-cgi/access/login/damquangloc.com"
-            className="text-blue-400 underline text-sm"
-          >
-            Đăng nhập lại
-          </a>
+          <a href="/cdn-cgi/access/login/damquangloc.com" className="text-blue-400 underline text-sm">Đăng nhập lại</a>
         </div>
       </div>
     )
@@ -203,7 +198,7 @@ export default function DashboardPage() {
           <div className="text-right">
             <div className="flex items-center gap-2 justify-end">
               <p className="text-sm text-slate-300">{email}</p>
-              {isAdmin(email) && (
+              {email && isAdmin(email) && (
                 <span className="text-xs bg-blue-600 px-2 py-0.5 rounded-full">
                   Admin
                 </span>
