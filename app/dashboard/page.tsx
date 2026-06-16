@@ -179,6 +179,8 @@ export default function DashboardPage() {
   // Chart account selector
   const [chartAccount, setChartAccount] = useState('all')
 
+  const isCurrent = year === now.getFullYear() && month === now.getMonth() + 1
+
   // Step 1 — email từ CF cookie
   useEffect(() => {
     setEmail(getEmailFromCookie())
@@ -301,6 +303,25 @@ export default function DashboardPage() {
     return { totalPnL, totalDeals, lastEquity }
   })()
 
+  // Overview monthly stats — TẤT CẢ accounts (cho stat cards tháng quá khứ)
+  const overviewMonthlyStats = (() => {
+    const allLabels = accounts.map(a => a.label)
+    const totalPnL = allLabels.reduce((sum, label) => {
+      return sum + (pnlData[label] || []).reduce((s, d) => s + (d.pnl || 0), 0)
+    }, 0)
+    const lastEquity = allLabels.reduce((sum, label) => {
+      const pts = equityData[label] || []
+      const last = [...pts].reverse().find(d => d.equity !== null)
+      return sum + (last?.equity || 0)
+    }, 0)
+    const lastBalance = allLabels.reduce((sum, label) => {
+      const pts = equityData[label] || []
+      const last = [...pts].reverse().find(d => d.balance !== null)
+      return sum + (last?.balance || 0)
+    }, 0)
+    return { totalPnL, lastEquity, lastBalance }
+  })()
+
   // ─── Render states ────────────────────────────────────────────────────────
 
   if (loading) {
@@ -373,14 +394,29 @@ export default function DashboardPage() {
 
           {/* Stat cards */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-            <StatCard label="Tổng Balance" value={fmt(totals.balance)} />
-            <StatCard label="Tổng Equity"  value={fmt(totals.equity)} />
-            <StatCard label="Net Deposit"  value={fmt(totals.baseline)} />
-            <StatCard
-              label="PnL vs Baseline"
-              value={`${fmtPnL(totals.pnl)} (${fmtPct(totals.pnl, totals.baseline)})`}
-              color={totals.pnl >= 0 ? 'green' : 'red'}
-            />
+            {isCurrent ? (
+              <>
+                <StatCard label="Tổng Balance" value={fmt(totals.balance)} />
+                <StatCard label="Tổng Equity" value={fmt(totals.equity)} />
+                <StatCard label="Net Deposit" value={fmt(totals.baseline)} />
+                <StatCard
+                  label="PnL vs Baseline"
+                  value={fmtPnL(totals.pnl) + ' (' + fmtPct(totals.pnl, totals.baseline) + ')'}
+                  color={totals.pnl >= 0 ? 'green' : 'red'}
+                />
+              </>
+            ) : (
+              <>
+                <StatCard label={'Balance T' + month + '/' + year} value={chartLoading ? '...' : fmt(overviewMonthlyStats.lastBalance)} />
+                <StatCard label={'Equity T' + month + '/' + year} value={chartLoading ? '...' : fmt(overviewMonthlyStats.lastEquity)} />
+                <StatCard label="Net Deposit" value={fmt(totals.baseline)} />
+                <StatCard
+                  label={'PnL T' + month + '/' + year}
+                  value={chartLoading ? '...' : fmtPnL(overviewMonthlyStats.totalPnL)}
+                  color={overviewMonthlyStats.totalPnL >= 0 ? 'green' : 'red'}
+                />
+              </>
+            )}
           </div>
 
           {/* Account table */}
