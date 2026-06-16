@@ -237,6 +237,23 @@ export default function DashboardPage() {
     return { totalPnL, totalDeals, lastEquity, lastBalance }
   })()
 
+  // Per-account monthly stats (cho bảng khi viewMode === 'monthly')
+  const accountMonthlyStats = accounts.reduce((map, a) => {
+    const pnlPts = pnlData[a.label] || []
+    const eqPts  = equityData[a.label] || []
+    const totalPnL   = pnlPts.reduce((s, d) => s + (d.pnl || 0), 0)
+    const totalDeals = pnlPts.reduce((s, d) => s + (d.deal_count || 0), 0)
+    const lastEq  = [...eqPts].reverse().find(d => d.equity  !== null)
+    const lastBal = [...eqPts].reverse().find(d => d.balance !== null)
+    map[a.label] = {
+      pnl:     totalPnL,
+      deals:   totalDeals,
+      equity:  lastEq?.equity   || 0,
+      balance: lastBal?.balance || 0,
+    }
+    return map
+  }, {} as Record<string, { pnl: number; deals: number; equity: number; balance: number }>)
+
   // Accounts hiển thị trên chart (section 2)
   const chartLabels =
     chartAccount === 'all'
@@ -448,7 +465,7 @@ export default function DashboardPage() {
             </div>
           )}
 
-          {/* Account table — luôn show real-time */}
+          {/* Account table — respond theo viewMode */}
           <div className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
             <div className="px-6 py-4 border-b border-slate-700 flex items-center justify-between">
               <h2 className="font-semibold text-slate-200">Tài khoản ({accounts.length})</h2>
@@ -469,12 +486,12 @@ export default function DashboardPage() {
                   <thead>
                     <tr className="text-xs text-slate-500 uppercase border-b border-slate-700">
                       <th className="px-6 py-3 text-left">Tài khoản</th>
-                      <th className="px-6 py-3 text-right">Balance</th>
-                      <th className="px-6 py-3 text-right">Equity</th>
-                      <th className="px-6 py-3 text-right">Floating</th>
+                      <th className="px-6 py-3 text-right">{viewMode === 'monthly' ? 'Balance cuối tháng' : 'Balance'}</th>
+                      <th className="px-6 py-3 text-right">{viewMode === 'monthly' ? 'Equity cuối tháng' : 'Equity'}</th>
+                      <th className="px-6 py-3 text-right">{viewMode === 'monthly' ? 'PnL tháng' : 'Floating'}</th>
                       <th className="px-6 py-3 text-right">Net Deposit</th>
-                      <th className="px-6 py-3 text-right">PnL</th>
-                      <th className="px-6 py-3 text-right">Lệnh mở</th>
+                      <th className="px-6 py-3 text-right">{viewMode === 'monthly' ? 'Số lệnh' : 'PnL'}</th>
+                      <th className="px-6 py-3 text-right">{viewMode === 'monthly' ? '' : 'Lệnh mở'}</th>
                       <th className="px-6 py-3 text-right">Đòn bẩy</th>
                     </tr>
                   </thead>
@@ -490,20 +507,42 @@ export default function DashboardPage() {
                             </div>
                           </div>
                         </td>
-                        <td className="px-6 py-4 text-right text-slate-300">{fmt(a.balance, a.currency)}</td>
-                        <td className="px-6 py-4 text-right text-slate-300">{fmt(a.equity, a.currency)}</td>
-                        <td className={'px-6 py-4 text-right ' + (a.floating_pnl >= 0 ? 'text-emerald-400' : 'text-red-400')}>
-                          {fmtPnL(a.floating_pnl)}
-                        </td>
-                        <td className="px-6 py-4 text-right text-slate-300">{fmt(a.baseline)}</td>
-                        <td className={'px-6 py-4 text-right font-semibold ' + (a.pnl_vs_baseline >= 0 ? 'text-emerald-400' : 'text-red-400')}>
-                          {fmtPnL(a.pnl_vs_baseline)}
-                          <span className="text-xs font-normal ml-1 opacity-60">
-                            {'(' + fmtPct(a.pnl_vs_baseline, a.baseline) + ')'}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4 text-right text-slate-300">{a.open_positions}</td>
-                        <td className="px-6 py-4 text-right text-slate-400">{'1:' + a.leverage}</td>
+                        {viewMode === 'monthly' ? (
+                          <>
+                            <td className="px-6 py-4 text-right text-slate-300">
+                              {chartLoading ? '...' : fmt(accountMonthlyStats[a.label]?.balance || 0, a.currency)}
+                            </td>
+                            <td className="px-6 py-4 text-right text-slate-300">
+                              {chartLoading ? '...' : fmt(accountMonthlyStats[a.label]?.equity || 0, a.currency)}
+                            </td>
+                            <td className={'px-6 py-4 text-right font-semibold ' + ((accountMonthlyStats[a.label]?.pnl || 0) >= 0 ? 'text-emerald-400' : 'text-red-400')}>
+                              {chartLoading ? '...' : fmtPnL(accountMonthlyStats[a.label]?.pnl || 0)}
+                            </td>
+                            <td className="px-6 py-4 text-right text-slate-300">{fmt(a.baseline)}</td>
+                            <td className="px-6 py-4 text-right text-slate-300">
+                              {chartLoading ? '...' : (accountMonthlyStats[a.label]?.deals || 0) + ' lệnh'}
+                            </td>
+                            <td className="px-6 py-4 text-right text-slate-300"></td>
+                            <td className="px-6 py-4 text-right text-slate-400">{'1:' + a.leverage}</td>
+                          </>
+                        ) : (
+                          <>
+                            <td className="px-6 py-4 text-right text-slate-300">{fmt(a.balance, a.currency)}</td>
+                            <td className="px-6 py-4 text-right text-slate-300">{fmt(a.equity, a.currency)}</td>
+                            <td className={'px-6 py-4 text-right ' + (a.floating_pnl >= 0 ? 'text-emerald-400' : 'text-red-400')}>
+                              {fmtPnL(a.floating_pnl)}
+                            </td>
+                            <td className="px-6 py-4 text-right text-slate-300">{fmt(a.baseline)}</td>
+                            <td className={'px-6 py-4 text-right font-semibold ' + (a.pnl_vs_baseline >= 0 ? 'text-emerald-400' : 'text-red-400')}>
+                              {fmtPnL(a.pnl_vs_baseline)}
+                              <span className="text-xs font-normal ml-1 opacity-60">
+                                {'(' + fmtPct(a.pnl_vs_baseline, a.baseline) + ')'}
+                              </span>
+                            </td>
+                            <td className="px-6 py-4 text-right text-slate-300">{a.open_positions}</td>
+                            <td className="px-6 py-4 text-right text-slate-400">{'1:' + a.leverage}</td>
+                          </>
+                        )}
                       </tr>
                     ))}
                   </tbody>
