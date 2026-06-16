@@ -65,16 +65,16 @@ function getEmailFromCookie(): string | null {
     const cfCookie = document.cookie
       .split(';')
       .find(c => c.trim().startsWith('CF_Authorization='))
-    if (!cfCookie) return null
+    if (!cfCookie) return 'damquangloc.offical@gmail.com' // DEV: fallback khi không có CF Access
     const jwt = cfCookie.split('=').slice(1).join('=').trim()
     const parts = jwt.split('.')
-    if (parts.length !== 3) return null
+    if (parts.length !== 3) return 'damquangloc.offical@gmail.com' // DEV: fallback
     const payload = JSON.parse(
       atob(parts[1].replace(/-/g, '+').replace(/_/g, '/'))
     )
     return payload.email || null
   } catch {
-    return null
+    return 'damquangloc.offical@gmail.com' // DEV: fallback
   }
 }
 
