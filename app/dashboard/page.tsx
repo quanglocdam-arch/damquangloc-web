@@ -65,16 +65,16 @@ function getEmailFromCookie(): string | null {
     const cfCookie = document.cookie
       .split(';')
       .find(c => c.trim().startsWith('CF_Authorization='))
-    if (!cfCookie) return 'damquangloc.offical@gmail.com' // DEV: fallback khi không có CF Access
+    if (!cfCookie) return 'damquangloc.offical@gmail.com'
     const jwt = cfCookie.split('=').slice(1).join('=').trim()
     const parts = jwt.split('.')
-    if (parts.length !== 3) return 'damquangloc.offical@gmail.com' // DEV: fallback
+    if (parts.length !== 3) return 'damquangloc.offical@gmail.com'
     const payload = JSON.parse(
       atob(parts[1].replace(/-/g, '+').replace(/_/g, '/'))
     )
     return payload.email || null
   } catch {
-    return 'damquangloc.offical@gmail.com' // DEV: fallback
+    return 'damquangloc.offical@gmail.com'
   }
 }
 
@@ -87,71 +87,30 @@ function fmt(value: number, currency = 'USD'): string {
 }
 
 function fmtPnL(value: number): string {
-  return `${value >= 0 ? '+' : ''}${fmt(value)}`
+  return (value >= 0 ? '+' : '') + fmt(value)
 }
 
 function fmtPct(pnl: number, baseline: number): string {
   if (baseline === 0) return '—'
-  return `${((pnl / baseline) * 100).toFixed(1)}%`
+  return ((pnl / baseline) * 100).toFixed(1) + '%'
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-function StatCard({ label, value, color }: {
+function StatCard({ label, value, sub, color }: {
   label: string
   value: string
+  sub?: string
   color?: 'green' | 'red' | 'white'
 }) {
-  const colors = {
-    green: 'text-emerald-400',
-    red:   'text-red-400',
-    white: 'text-white',
-  }
+  const colorClass =
+    color === 'green' ? 'text-emerald-400' :
+    color === 'red'   ? 'text-red-400'     : 'text-white'
   return (
     <div className="bg-slate-800 rounded-xl p-5 border border-slate-700">
       <p className="text-xs text-slate-500 uppercase tracking-wider mb-2">{label}</p>
-      <p className={`text-2xl font-bold ${colors[color ?? 'white']}`}>{value}</p>
-    </div>
-  )
-}
-
-function MonthNav({ year, month, onChange }: {
-  year: number
-  month: number
-  onChange: (y: number, m: number) => void
-}) {
-  const now = new Date()
-  const isCurrent = year === now.getFullYear() && month === now.getMonth() + 1
-
-  function prev() {
-    if (month === 1) onChange(year - 1, 12)
-    else onChange(year, month - 1)
-  }
-
-  function next() {
-    if (isCurrent) return
-    if (month === 12) onChange(year + 1, 1)
-    else onChange(year, month + 1)
-  }
-
-  return (
-    <div className="flex items-center gap-2">
-      <button
-        onClick={prev}
-        className="w-7 h-7 flex items-center justify-center rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 text-sm transition-colors"
-      >
-        ←
-      </button>
-      <span className="text-sm font-semibold text-slate-200 w-20 text-center">
-        T{month}/{year}
-      </span>
-      <button
-        onClick={next}
-        disabled={isCurrent}
-        className="w-7 h-7 flex items-center justify-center rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 text-sm transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-      >
-        →
-      </button>
+      <p className={'text-2xl font-bold ' + colorClass}>{value}</p>
+      {sub && <p className="text-xs text-slate-500 mt-1">{sub}</p>}
     </div>
   )
 }
@@ -161,25 +120,26 @@ function MonthNav({ year, month, onChange }: {
 export default function DashboardPage() {
   const now = new Date()
 
-  const [email, setEmail]     = useState<string | null | undefined>(undefined)
+  const [email, setEmail]       = useState<string | null | undefined>(undefined)
   const [overview, setOverview] = useState<Overview | null>(null)
   const [accounts, setAccounts] = useState<Account[]>([])
   const [loading, setLoading]   = useState(true)
   const [error, setError]       = useState<string | null>(null)
 
-  // Shared month/year filter
+  // View mode: 'overall' = tổng thể real-time, 'monthly' = xem theo tháng
+  const [viewMode, setViewMode] = useState<'overall' | 'monthly'>('overall')
+
+  // Month/year — dùng chung cho cả 2 section
   const [year, setYear]   = useState(now.getFullYear())
   const [month, setMonth] = useState(now.getMonth() + 1)
 
   // Chart data
-  const [equityData, setEquityData] = useState<Record<string, DailyEquityPoint[]>>({})
-  const [pnlData, setPnlData]       = useState<Record<string, DailyPnLPoint[]>>({})
+  const [equityData, setEquityData]     = useState<Record<string, DailyEquityPoint[]>>({})
+  const [pnlData, setPnlData]           = useState<Record<string, DailyPnLPoint[]>>({})
   const [chartLoading, setChartLoading] = useState(false)
 
-  // Chart account selector
+  // Chart account selector (section 2)
   const [chartAccount, setChartAccount] = useState('all')
-
-  const isCurrent = year === now.getFullYear() && month === now.getMonth() + 1
 
   // Step 1 — email từ CF cookie
   useEffect(() => {
@@ -190,10 +150,9 @@ export default function DashboardPage() {
   useEffect(() => {
     if (email === undefined) return
     if (email === null) { setLoading(false); return }
-
     const load = async () => {
       try {
-        const res = await fetch(`${API_URL}/api/overview?api_key=${API_KEY}`)
+        const res = await fetch(API_URL + '/api/overview?api_key=' + API_KEY)
         if (!res.ok) throw new Error('API error')
         const data: Overview = await res.json()
         setOverview(data)
@@ -217,15 +176,15 @@ export default function DashboardPage() {
     setChartLoading(true)
     try {
       const [eqRes, pnlRes] = await Promise.all([
-        fetch(`${API_URL}/api/daily-equity?api_key=${API_KEY}&year=${y}&month=${m}`),
-        fetch(`${API_URL}/api/daily-pnl?api_key=${API_KEY}&year=${y}&month=${m}`),
+        fetch(API_URL + '/api/daily-equity?api_key=' + API_KEY + '&year=' + y + '&month=' + m),
+        fetch(API_URL + '/api/daily-pnl?api_key='    + API_KEY + '&year=' + y + '&month=' + m),
       ])
       const eqJson  = await eqRes.json()
       const pnlJson = await pnlRes.json()
       setEquityData(eqJson.data  || {})
-      setPnlData(pnlJson.data || {})
+      setPnlData(pnlJson.data    || {})
     } catch {
-      // silent — charts stay empty
+      // silent
     } finally {
       setChartLoading(false)
     }
@@ -235,8 +194,16 @@ export default function DashboardPage() {
     if (email && email !== null) fetchChartData(year, month)
   }, [email, year, month, fetchChartData])
 
+  // Khi bấm mũi tên tháng → tự chuyển sang monthly mode
+  function handleMonthChange(y: number, m: number) {
+    setYear(y)
+    setMonth(m)
+    setViewMode('monthly')
+  }
+
   // ─── Derived ─────────────────────────────────────────────────────────────
 
+  // Totals real-time (overall mode)
   const totals = accounts.reduce(
     (acc, a) => ({
       balance:  acc.balance  + a.balance,
@@ -248,47 +215,36 @@ export default function DashboardPage() {
     { balance: 0, equity: 0, baseline: 0, pnl: 0, floating: 0 }
   )
 
-  // Accounts hiển thị trên chart
+  // Monthly stats — TẤT CẢ accounts (cho Tổng quan monthly mode)
+  const overviewMonthlyStats = (() => {
+    const allLabels = accounts.map(a => a.label)
+    const totalPnL = allLabels.reduce((sum, label) => {
+      return sum + (pnlData[label] || []).reduce((s, d) => s + (d.pnl || 0), 0)
+    }, 0)
+    const totalDeals = allLabels.reduce((sum, label) => {
+      return sum + (pnlData[label] || []).reduce((s, d) => s + (d.deal_count || 0), 0)
+    }, 0)
+    const lastEquity = allLabels.reduce((sum, label) => {
+      const pts = equityData[label] || []
+      const last = [...pts].reverse().find(d => d.equity !== null)
+      return sum + (last?.equity || 0)
+    }, 0)
+    const lastBalance = allLabels.reduce((sum, label) => {
+      const pts = equityData[label] || []
+      const last = [...pts].reverse().find(d => d.balance !== null)
+      return sum + (last?.balance || 0)
+    }, 0)
+    return { totalPnL, totalDeals, lastEquity, lastBalance }
+  })()
+
+  // Accounts hiển thị trên chart (section 2)
   const chartLabels =
     chartAccount === 'all'
       ? accounts.map(a => a.label)
       : accounts.some(a => a.label === chartAccount) ? [chartAccount] : []
 
-  // Build equity chart — chỉ giữ ngày có ít nhất 1 account có data thật (fix null)
-  const equityChartData = (() => {
-    const keys = Object.keys(equityData)
-    if (!keys.length) return []
-    const allDates = equityData[keys[0]]?.map(d => d.date) || []
-    const rows = allDates.map(date => {
-      const row: Record<string, string | number | null> = { date: date.slice(5) }
-      for (const label of chartLabels) {
-        const pt = equityData[label]?.find(d => d.date === date)
-        row[label] = pt?.equity ?? null
-      }
-      return row
-    })
-    // Bỏ ngày mà tất cả accounts đều null
-    return rows.filter(row => chartLabels.some(l => row[l] !== null && row[l] !== undefined))
-  })()
-
-  // Build PnL chart — chỉ giữ ngày có deal
-  const pnlChartData = (() => {
-    const keys = Object.keys(pnlData)
-    if (!keys.length) return []
-    const allDates = pnlData[keys[0]]?.map(d => d.date) || []
-    const rows = allDates.map(date => {
-      const row: Record<string, string | number | null> = { date: date.slice(5) }
-      for (const label of chartLabels) {
-        const pt = pnlData[label]?.find(d => d.date === date)
-        row[label] = pt?.pnl ?? null
-      }
-      return row
-    })
-    return rows.filter(row => chartLabels.some(l => row[l] !== null && row[l] !== undefined))
-  })()
-
-  // Monthly summary
-  const monthlyStats = (() => {
+  // Monthly stats cho section 2 (theo chartLabels)
+  const chartMonthlyStats = (() => {
     const totalPnL = chartLabels.reduce((sum, label) => {
       return sum + (pnlData[label] || []).reduce((s, d) => s + (d.pnl || 0), 0)
     }, 0)
@@ -303,23 +259,36 @@ export default function DashboardPage() {
     return { totalPnL, totalDeals, lastEquity }
   })()
 
-  // Overview monthly stats — TẤT CẢ accounts (cho stat cards tháng quá khứ)
-  const overviewMonthlyStats = (() => {
-    const allLabels = accounts.map(a => a.label)
-    const totalPnL = allLabels.reduce((sum, label) => {
-      return sum + (pnlData[label] || []).reduce((s, d) => s + (d.pnl || 0), 0)
-    }, 0)
-    const lastEquity = allLabels.reduce((sum, label) => {
-      const pts = equityData[label] || []
-      const last = [...pts].reverse().find(d => d.equity !== null)
-      return sum + (last?.equity || 0)
-    }, 0)
-    const lastBalance = allLabels.reduce((sum, label) => {
-      const pts = equityData[label] || []
-      const last = [...pts].reverse().find(d => d.balance !== null)
-      return sum + (last?.balance || 0)
-    }, 0)
-    return { totalPnL, lastEquity, lastBalance }
+  // Equity chart data — bỏ ngày tất cả null
+  const equityChartData = (() => {
+    const keys = Object.keys(equityData)
+    if (!keys.length) return []
+    const allDates = equityData[keys[0]]?.map(d => d.date) || []
+    const rows = allDates.map(date => {
+      const row: Record<string, string | number | null> = { date: date.slice(5) }
+      for (const label of chartLabels) {
+        const pt = equityData[label]?.find(d => d.date === date)
+        row[label] = pt?.equity ?? null
+      }
+      return row
+    })
+    return rows.filter(row => chartLabels.some(l => row[l] !== null && row[l] !== undefined))
+  })()
+
+  // PnL chart data — bỏ ngày tất cả null
+  const pnlChartData = (() => {
+    const keys = Object.keys(pnlData)
+    if (!keys.length) return []
+    const allDates = pnlData[keys[0]]?.map(d => d.date) || []
+    const rows = allDates.map(date => {
+      const row: Record<string, string | number | null> = { date: date.slice(5) }
+      for (const label of chartLabels) {
+        const pt = pnlData[label]?.find(d => d.date === date)
+        row[label] = pt?.pnl ?? null
+      }
+      return row
+    })
+    return rows.filter(row => chartLabels.some(l => row[l] !== null && row[l] !== undefined))
   })()
 
   // ─── Render states ────────────────────────────────────────────────────────
@@ -389,42 +358,102 @@ export default function DashboardPage() {
         <section>
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Tổng quan</h2>
-            <MonthNav year={year} month={month} onChange={(y, m) => { setYear(y); setMonth(m) }} />
+
+            {/* Controls: Overall button + Month nav */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setViewMode('overall')}
+                className={
+                  'text-xs px-3 py-1.5 rounded-lg font-medium transition-colors ' +
+                  (viewMode === 'overall'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-slate-700 text-slate-400 hover:text-slate-200')
+                }
+              >
+                Tổng thể
+              </button>
+
+              {/* Month nav */}
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => {
+                    const newMonth = month === 1 ? 12 : month - 1
+                    const newYear  = month === 1 ? year - 1 : year
+                    handleMonthChange(newYear, newMonth)
+                  }}
+                  className="w-7 h-7 flex items-center justify-center rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 text-sm transition-colors"
+                >
+                  ←
+                </button>
+                <span
+                  className={
+                    'text-sm font-semibold w-20 text-center cursor-pointer ' +
+                    (viewMode === 'monthly' ? 'text-blue-400' : 'text-slate-400')
+                  }
+                  onClick={() => setViewMode('monthly')}
+                >
+                  {'T' + month + '/' + year}
+                </span>
+                <button
+                  onClick={() => {
+                    const isCurrentMonth = year === now.getFullYear() && month === now.getMonth() + 1
+                    if (isCurrentMonth) return
+                    const newMonth = month === 12 ? 1  : month + 1
+                    const newYear  = month === 12 ? year + 1 : year
+                    handleMonthChange(newYear, newMonth)
+                  }}
+                  disabled={year === now.getFullYear() && month === now.getMonth() + 1}
+                  className="w-7 h-7 flex items-center justify-center rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 text-sm transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  →
+                </button>
+              </div>
+            </div>
           </div>
 
-          {/* Stat cards */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-            {isCurrent ? (
-              <>
-                <StatCard label="Tổng Balance" value={fmt(totals.balance)} />
-                <StatCard label="Tổng Equity" value={fmt(totals.equity)} />
-                <StatCard label="Net Deposit" value={fmt(totals.baseline)} />
-                <StatCard
-                  label="PnL vs Baseline"
-                  value={fmtPnL(totals.pnl) + ' (' + fmtPct(totals.pnl, totals.baseline) + ')'}
-                  color={totals.pnl >= 0 ? 'green' : 'red'}
-                />
-              </>
-            ) : (
-              <>
-                <StatCard label={'Balance T' + month + '/' + year} value={chartLoading ? '...' : fmt(overviewMonthlyStats.lastBalance)} />
-                <StatCard label={'Equity T' + month + '/' + year} value={chartLoading ? '...' : fmt(overviewMonthlyStats.lastEquity)} />
-                <StatCard label="Net Deposit" value={fmt(totals.baseline)} />
-                <StatCard
-                  label={'PnL T' + month + '/' + year}
-                  value={chartLoading ? '...' : fmtPnL(overviewMonthlyStats.totalPnL)}
-                  color={overviewMonthlyStats.totalPnL >= 0 ? 'green' : 'red'}
-                />
-              </>
-            )}
-          </div>
+          {/* Stat cards — đổi theo viewMode */}
+          {viewMode === 'overall' ? (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+              <StatCard label="Tổng Balance" value={fmt(totals.balance)} />
+              <StatCard label="Tổng Equity"  value={fmt(totals.equity)} sub="Thời gian thực" />
+              <StatCard label="Net Deposit"  value={fmt(totals.baseline)} sub="Tổng vốn đã nạp" />
+              <StatCard
+                label="PnL vs Baseline"
+                value={fmtPnL(totals.pnl) + ' (' + fmtPct(totals.pnl, totals.baseline) + ')'}
+                color={totals.pnl >= 0 ? 'green' : 'red'}
+              />
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+              <StatCard
+                label={'Balance T' + month + '/' + year}
+                value={chartLoading ? '...' : fmt(overviewMonthlyStats.lastBalance)}
+                sub="Cuối tháng"
+              />
+              <StatCard
+                label={'Equity T' + month + '/' + year}
+                value={chartLoading ? '...' : fmt(overviewMonthlyStats.lastEquity)}
+                sub="Cuối tháng"
+              />
+              <StatCard
+                label={'PnL T' + month + '/' + year}
+                value={chartLoading ? '...' : fmtPnL(overviewMonthlyStats.totalPnL)}
+                color={overviewMonthlyStats.totalPnL >= 0 ? 'green' : 'red'}
+              />
+              <StatCard
+                label="Số lệnh"
+                value={chartLoading ? '...' : overviewMonthlyStats.totalDeals + ' lệnh'}
+                sub={'Tháng ' + month + '/' + year}
+              />
+            </div>
+          )}
 
-          {/* Account table */}
+          {/* Account table — luôn show real-time */}
           <div className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
             <div className="px-6 py-4 border-b border-slate-700 flex items-center justify-between">
               <h2 className="font-semibold text-slate-200">Tài khoản ({accounts.length})</h2>
               {totals.floating !== 0 && (
-                <span className={`text-sm font-medium ${totals.floating >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                <span className={'text-sm font-medium ' + (totals.floating >= 0 ? 'text-emerald-400' : 'text-red-400')}>
                   Floating: {fmtPnL(totals.floating)}
                 </span>
               )}
@@ -463,18 +492,18 @@ export default function DashboardPage() {
                         </td>
                         <td className="px-6 py-4 text-right text-slate-300">{fmt(a.balance, a.currency)}</td>
                         <td className="px-6 py-4 text-right text-slate-300">{fmt(a.equity, a.currency)}</td>
-                        <td className={`px-6 py-4 text-right ${a.floating_pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                        <td className={'px-6 py-4 text-right ' + (a.floating_pnl >= 0 ? 'text-emerald-400' : 'text-red-400')}>
                           {fmtPnL(a.floating_pnl)}
                         </td>
                         <td className="px-6 py-4 text-right text-slate-300">{fmt(a.baseline)}</td>
-                        <td className={`px-6 py-4 text-right font-semibold ${a.pnl_vs_baseline >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                        <td className={'px-6 py-4 text-right font-semibold ' + (a.pnl_vs_baseline >= 0 ? 'text-emerald-400' : 'text-red-400')}>
                           {fmtPnL(a.pnl_vs_baseline)}
                           <span className="text-xs font-normal ml-1 opacity-60">
-                            ({fmtPct(a.pnl_vs_baseline, a.baseline)})
+                            {'(' + fmtPct(a.pnl_vs_baseline, a.baseline) + ')'}
                           </span>
                         </td>
                         <td className="px-6 py-4 text-right text-slate-300">{a.open_positions}</td>
-                        <td className="px-6 py-4 text-right text-slate-400">1:{a.leverage}</td>
+                        <td className="px-6 py-4 text-right text-slate-400">{'1:' + a.leverage}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -487,7 +516,9 @@ export default function DashboardPage() {
         {/* ── PHÂN TÍCH THEO THÁNG ── */}
         <section>
           <div className="flex items-center justify-between mb-5">
-            <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Phân tích theo tháng</h2>
+            <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+              {'Phân tích T' + month + '/' + year}
+            </h2>
             <div className="flex items-center gap-3">
               <select
                 value={chartAccount}
@@ -499,7 +530,36 @@ export default function DashboardPage() {
                   <option key={a.login} value={a.label}>{a.label}</option>
                 ))}
               </select>
-              <MonthNav year={year} month={month} onChange={(y, m) => { setYear(y); setMonth(m) }} />
+
+              {/* Month nav — sync với section 1 */}
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => {
+                    const newMonth = month === 1 ? 12 : month - 1
+                    const newYear  = month === 1 ? year - 1 : year
+                    handleMonthChange(newYear, newMonth)
+                  }}
+                  className="w-7 h-7 flex items-center justify-center rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 text-sm transition-colors"
+                >
+                  ←
+                </button>
+                <span className="text-sm font-semibold text-slate-200 w-20 text-center">
+                  {'T' + month + '/' + year}
+                </span>
+                <button
+                  onClick={() => {
+                    const isCurrentMonth = year === now.getFullYear() && month === now.getMonth() + 1
+                    if (isCurrentMonth) return
+                    const newMonth = month === 12 ? 1 : month + 1
+                    const newYear  = month === 12 ? year + 1 : year
+                    handleMonthChange(newYear, newMonth)
+                  }}
+                  disabled={year === now.getFullYear() && month === now.getMonth() + 1}
+                  className="w-7 h-7 flex items-center justify-center rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 text-sm transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  →
+                </button>
+              </div>
             </div>
           </div>
 
@@ -517,7 +577,7 @@ export default function DashboardPage() {
                 </p>
                 {equityChartData.length === 0 ? (
                   <div className="h-48 flex items-center justify-center text-slate-500 text-sm">
-                    Không có dữ liệu equity
+                    Không có dữ liệu equity cho tháng này
                   </div>
                 ) : (
                   <ResponsiveContainer width="100%" height={280}>
@@ -528,7 +588,7 @@ export default function DashboardPage() {
                         tick={{ fill: '#64748b', fontSize: 11 }}
                         tickLine={false}
                         axisLine={false}
-                        tickFormatter={v => `$${(v / 1000).toFixed(1)}k`}
+                        tickFormatter={v => '$' + (v / 1000).toFixed(1) + 'k'}
                         width={55}
                       />
                       <Tooltip
@@ -560,7 +620,7 @@ export default function DashboardPage() {
                 </p>
                 {pnlChartData.length === 0 ? (
                   <div className="h-48 flex items-center justify-center text-slate-500 text-sm">
-                    Không có dữ liệu PnL
+                    Không có dữ liệu PnL cho tháng này
                   </div>
                 ) : (
                   <ResponsiveContainer width="100%" height={280}>
@@ -571,7 +631,7 @@ export default function DashboardPage() {
                         tick={{ fill: '#64748b', fontSize: 11 }}
                         tickLine={false}
                         axisLine={false}
-                        tickFormatter={v => `$${v}`}
+                        tickFormatter={v => '$' + v}
                         width={55}
                       />
                       <ReferenceLine y={0} stroke="#475569" strokeDasharray="4 2" />
@@ -599,13 +659,13 @@ export default function DashboardPage() {
 
               {/* Monthly summary */}
               <div className="grid grid-cols-3 gap-4">
-                <StatCard label="Equity cuối tháng" value={fmt(monthlyStats.lastEquity)} />
+                <StatCard label="Equity cuối tháng" value={fmt(chartMonthlyStats.lastEquity)} />
                 <StatCard
-                  label="Tổng PnL tháng"
-                  value={fmtPnL(monthlyStats.totalPnL)}
-                  color={monthlyStats.totalPnL >= 0 ? 'green' : 'red'}
+                  label={'PnL T' + month + '/' + year}
+                  value={fmtPnL(chartMonthlyStats.totalPnL)}
+                  color={chartMonthlyStats.totalPnL >= 0 ? 'green' : 'red'}
                 />
-                <StatCard label="Số lệnh đã đóng" value={`${monthlyStats.totalDeals} lệnh`} />
+                <StatCard label="Số lệnh đã đóng" value={chartMonthlyStats.totalDeals + ' lệnh'} />
               </div>
 
             </div>
