@@ -53,6 +53,44 @@ interface DailyPnLPoint {
   deal_count: number
 }
 
+interface BaselineOperation {
+  time: string
+  type: string
+  amount: number
+}
+
+interface BaselineEntry {
+  login: number
+  label: string
+  total_deposit: number
+  total_withdrawal: number
+  net_baseline: number
+  operations: BaselineOperation[]
+}
+
+interface BaselineResponse {
+  baselines: Record<string, BaselineEntry>
+}
+
+interface DealRow {
+  deal_time: string
+  profit: number
+  commission: number
+  swap: number
+}
+
+interface DealsResponse {
+  total: number
+  deals: DealRow[]
+}
+
+interface AccountMetric {
+  netDeposit: number
+  netWithdraw: number
+  pnl: number
+  commission: number
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function getEmailFromCookie(): string | null {
@@ -91,6 +129,10 @@ function fmtPct(pnl: number, baseline: number): string {
   return ((pnl / baseline) * 100).toFixed(1) + '%'
 }
 
+function round2(n: number): number {
+  return Math.round(n * 100) / 100
+}
+
 function pad2(n: number): string {
   return n < 10 ? '0' + n : '' + n
 }
@@ -104,7 +146,7 @@ function formatDMY(iso: string): string {
   return d + '/' + m + '/' + y
 }
 
-// Liệt kê các (year, month) phủ khoảng [start, end] để gọi API theo từng tháng
+// Liệt kê các (year, month) phủ khoảng [start, end] để gọi API daily-* theo từng tháng
 function getMonthsInRange(start: string, end: string): { year: number; month: number }[] {
   const startD = new Date(start + 'T00:00:00')
   const endD   = new Date(end   + 'T00:00:00')
@@ -116,6 +158,13 @@ function getMonthsInRange(start: string, end: string): { year: number; month: nu
     cur = new Date(cur.getFullYear(), cur.getMonth() + 1, 1)
   }
   return months
+}
+
+// Có nằm trong khoảng đã chọn không — 'overall' = luôn true (lấy hết, all-time)
+function inRange(timeStr: string, mode: 'overall' | 'range', start: string, end: string): boolean {
+  if (mode === 'overall') return true
+  const d = timeStr.slice(0, 10)
+  return d >= start && d <= end
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -184,20 +233,22 @@ export default function DashboardPage() {
   const [loading, setLoading]   = useState(true)
   const [error, setError]       = useState<string | null>(null)
 
-  // 'overall' = real-time tổng thể, 'range' = xem theo khoảng ngày đã chọn
+  // 'overall' = lấy hết (all-time), 'range' = lọc theo khoảng ngày đã chọn
   const [viewMode, setViewMode] = useState<'overall' | 'range'>('overall')
 
-  // Khoảng ngày — dùng chung cho cả 2 section
   const [startDate, setStartDate] = useState(firstOfMonthISO)
   const [endDate, setEndDate]     = useState(todayISO)
 
-  // Chart data (đã merge nhiều tháng + lọc đúng range)
+  // Dữ liệu chart (Equity / PnL theo ngày) — vẫn merge nhiều tháng theo range đã chọn
   const [equityData, setEquityData]     = useState<Record<string, DailyEquityPoint[]>>({})
   const [pnlData, setPnlData]           = useState<Record<string, DailyPnLPoint[]>>({})
   const [chartLoading, setChartLoading] = useState(false)
-
-  // Account filter cho biểu đồ
   const [chartAccount, setChartAccount] = useState('all')
+
+  // Dữ liệu cho bảng tài khoản: operations (deposit/withdraw) + raw deals (profit/commission/swap)
+  const [operations, setOperations] = useState<Record<string, BaselineOperation[]>>({})
+  const [rawDeals, setRawDeals]     = useState<Record<string, DealRow[]>>({})
+  const [tableLoading, setTableLoading] = useState(false)
 
   function handleStartChange(v: string) {
     setStartDate(v)
@@ -238,8 +289,8 @@ export default function DashboardPage() {
     load()
   }, [email])
 
-  // Step 3 — fetch + merge data cho khoảng ngày đã chọn (có thể trải nhiều tháng)
-  const fetchRangeData = useCallback(async (start: string, end: string) => {
+  // Step 3 — fetch + merge daily-equity / daily-pnl cho biểu đồ (theo range đã chọn)
+  const fetchChartData = useCallback(async (start: string, end: string) => {
     if (!start || !end || start > end) return
     setChartLoading(true)
     try {
@@ -252,10 +303,8 @@ export default function DashboardPage() {
           ])
         )
       )
-
       const mergedEquity: Record<string, DailyEquityPoint[]> = {}
       const mergedPnl: Record<string, DailyPnLPoint[]>       = {}
-
       for (const [eqJson, pnlJson] of results) {
         const eqD  = eqJson.data  || {}
         const pnlD = pnlJson.data || {}
@@ -268,15 +317,12 @@ export default function DashboardPage() {
           mergedPnl[label].push(...pnlD[label])
         }
       }
-
-      // Lọc đúng khoảng [start, end]
       for (const label of Object.keys(mergedEquity)) {
         mergedEquity[label] = mergedEquity[label].filter(d => d.date >= start && d.date <= end)
       }
       for (const label of Object.keys(mergedPnl)) {
         mergedPnl[label] = mergedPnl[label].filter(d => d.date >= start && d.date <= end)
       }
-
       setEquityData(mergedEquity)
       setPnlData(mergedPnl)
     } catch {
@@ -287,12 +333,64 @@ export default function DashboardPage() {
   }, [])
 
   useEffect(() => {
-    if (email && email !== null) fetchRangeData(startDate, endDate)
-  }, [email, startDate, endDate, fetchRangeData])
+    if (email && email !== null) fetchChartData(startDate, endDate)
+  }, [email, startDate, endDate, fetchChartData])
+
+  // Step 4 — fetch deposit/withdrawal operations (toàn bộ, có timestamp) — 1 lần khi có accounts
+  useEffect(() => {
+    if (!accounts.length) return
+    const loadOps = async () => {
+      try {
+        const res = await fetch(API_URL + '/api/baseline?api_key=' + API_KEY)
+        const json: BaselineResponse = await res.json()
+        const baselines = json.baselines || {}
+        const opsMap: Record<string, BaselineOperation[]> = {}
+        for (const label of Object.keys(baselines)) {
+          opsMap[label] = baselines[label].operations || []
+        }
+        setOperations(opsMap)
+      } catch {
+        // silent
+      }
+    }
+    loadOps()
+  }, [accounts])
+
+  // Step 5 — fetch raw deals (profit/commission/swap tách riêng) cho từng account đã phân quyền
+  const fetchRawDeals = useCallback(async (accs: Account[], start: string, mode: 'overall' | 'range') => {
+    if (!accs.length) return
+    setTableLoading(true)
+    try {
+      const daysBack =
+        mode === 'overall'
+          ? 3650
+          : Math.max(2, Math.ceil((new Date(todayISO).getTime() - new Date(start).getTime()) / 86400000) + 2)
+
+      const results = await Promise.all(
+        accs.map(a =>
+          fetch(API_URL + '/api/deals?api_key=' + API_KEY + '&account=' + a.login + '&days=' + daysBack)
+            .then(r => r.json())
+            .then((json: DealsResponse) => ({ label: a.label, deals: json.deals || [] }))
+        )
+      )
+      const map: Record<string, DealRow[]> = {}
+      for (const { label, deals } of results) {
+        map[label] = deals
+      }
+      setRawDeals(map)
+    } catch {
+      // silent
+    } finally {
+      setTableLoading(false)
+    }
+  }, [todayISO])
+
+  useEffect(() => {
+    if (accounts.length) fetchRawDeals(accounts, startDate, viewMode)
+  }, [accounts, startDate, viewMode, fetchRawDeals])
 
   // ─── Derived ─────────────────────────────────────────────────────────────
 
-  // Totals real-time (overall mode)
   const totals = accounts.reduce(
     (acc, a) => ({
       balance:  acc.balance  + a.balance,
@@ -303,33 +401,49 @@ export default function DashboardPage() {
     { balance: 0, baseline: 0, pnl: 0, floating: 0 }
   )
 
-  // Range stats — TẤT CẢ accounts (cho Tổng quan khi viewMode === 'range')
-  const overviewRangeStats = (() => {
-    const allLabels = accounts.map(a => a.label)
-    const totalPnL = allLabels.reduce((sum, label) => {
-      return sum + (pnlData[label] || []).reduce((s, d) => s + (d.pnl || 0), 0)
-    }, 0)
-    const totalDeals = allLabels.reduce((sum, label) => {
-      return sum + (pnlData[label] || []).reduce((s, d) => s + (d.deal_count || 0), 0)
-    }, 0)
-    const lastBalance = allLabels.reduce((sum, label) => {
-      const pts = equityData[label] || []
-      const last = [...pts].reverse().find(d => d.balance !== null)
-      return sum + (last?.balance || 0)
-    }, 0)
-    return { totalPnL, totalDeals, lastBalance }
-  })()
+  // Per-account: Net Deposit / Net Withdraw / PNL / Commission — theo viewMode đã chọn
+  const accountMetrics: Record<string, AccountMetric> = accounts.reduce((map, a) => {
+    const ops   = operations[a.label] || []
+    const deals = rawDeals[a.label]   || []
 
-  // Per-account range stats (cho bảng khi viewMode === 'range')
-  const accountRangeStats = accounts.reduce((map, a) => {
-    const pnlPts = pnlData[a.label] || []
-    const eqPts  = equityData[a.label] || []
-    const totalPnL   = pnlPts.reduce((s, d) => s + (d.pnl || 0), 0)
-    const totalDeals = pnlPts.reduce((s, d) => s + (d.deal_count || 0), 0)
-    const lastBal = [...eqPts].reverse().find(d => d.balance !== null)
-    map[a.label] = { pnl: totalPnL, deals: totalDeals, balance: lastBal?.balance || 0 }
+    let netDeposit = 0
+    let netWithdraw = 0
+    for (const o of ops) {
+      if (!inRange(o.time, viewMode, startDate, endDate)) continue
+      if (o.type === 'DEPOSIT') netDeposit += o.amount
+      else netWithdraw += o.amount
+    }
+
+    let pnl = 0
+    let commission = 0
+    for (const d of deals) {
+      if (!inRange(d.deal_time, viewMode, startDate, endDate)) continue
+      pnl += d.profit + d.swap
+      commission += d.commission
+    }
+
+    map[a.label] = {
+      netDeposit:  round2(netDeposit),
+      netWithdraw: round2(netWithdraw),
+      pnl:         round2(pnl),
+      commission:  round2(commission),
+    }
     return map
-  }, {} as Record<string, { pnl: number; deals: number; balance: number }>)
+  }, {} as Record<string, AccountMetric>)
+
+  const metricTotals = accounts.reduce(
+    (acc, a) => {
+      const m = accountMetrics[a.label] || { netDeposit: 0, netWithdraw: 0, pnl: 0, commission: 0 }
+      return {
+        netDeposit:  acc.netDeposit  + m.netDeposit,
+        netWithdraw: acc.netWithdraw + m.netWithdraw,
+        pnl:         acc.pnl         + m.pnl,
+        commission:  acc.commission  + m.commission,
+        balance:     acc.balance     + a.balance,
+      }
+    },
+    { netDeposit: 0, netWithdraw: 0, pnl: 0, commission: 0, balance: 0 }
+  )
 
   // Accounts hiển thị trên chart
   const chartLabels =
@@ -337,7 +451,6 @@ export default function DashboardPage() {
       ? accounts.map(a => a.label)
       : accounts.some(a => a.label === chartAccount) ? [chartAccount] : []
 
-  // Range stats cho section Phân tích (theo chartLabels đã chọn)
   const chartRangeStats = (() => {
     const totalPnL = chartLabels.reduce((sum, label) => {
       return sum + (pnlData[label] || []).reduce((s, d) => s + (d.pnl || 0), 0)
@@ -353,7 +466,6 @@ export default function DashboardPage() {
     return { totalPnL, totalDeals, lastBalance }
   })()
 
-  // Equity chart data — bỏ ngày tất cả accounts đều null
   const equityChartData = (() => {
     const keys = Object.keys(equityData)
     if (!keys.length) return []
@@ -369,7 +481,6 @@ export default function DashboardPage() {
     return rows.filter(row => chartLabels.some(l => row[l] !== null && row[l] !== undefined))
   })()
 
-  // PnL chart data — bỏ ngày tất cả accounts đều null
   const pnlChartData = (() => {
     const keys = Object.keys(pnlData)
     if (!keys.length) return []
@@ -480,44 +591,23 @@ export default function DashboardPage() {
           </div>
 
           {/* Stat cards */}
-          {viewMode === 'overall' ? (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-              <StatCard label="Tổng Balance" value={fmt(totals.balance)} sub="Thời gian thực" />
-              <StatCard label="Net Deposit" value={fmt(totals.baseline)} sub="Tổng vốn đã nạp" />
-              <StatCard
-                label="PnL vs Baseline"
-                value={fmtPnL(totals.pnl) + ' (' + fmtPct(totals.pnl, totals.baseline) + ')'}
-                color={totals.pnl >= 0 ? 'green' : 'red'}
-              />
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-              <StatCard
-                label="Balance cuối kỳ"
-                value={chartLoading ? '...' : fmt(overviewRangeStats.lastBalance)}
-                sub={formatDMY(startDate) + ' → ' + formatDMY(endDate)}
-              />
-              <StatCard
-                label="PnL trong kỳ"
-                value={chartLoading ? '...' : fmtPnL(overviewRangeStats.totalPnL)}
-                color={overviewRangeStats.totalPnL >= 0 ? 'green' : 'red'}
-              />
-              <StatCard
-                label="Số lệnh đã đóng"
-                value={chartLoading ? '...' : overviewRangeStats.totalDeals + ' lệnh'}
-              />
-            </div>
-          )}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+            <StatCard label="Tổng Balance" value={fmt(totals.balance)} sub="Thời gian thực" />
+            <StatCard label="Net Deposit" value={fmt(totals.baseline)} sub="Tổng vốn đã nạp" />
+            <StatCard
+              label="PnL vs Baseline"
+              value={fmtPnL(totals.pnl) + ' (' + fmtPct(totals.pnl, totals.baseline) + ')'}
+              color={totals.pnl >= 0 ? 'green' : 'red'}
+            />
+          </div>
 
-          {/* Account table */}
+          {/* Account table — format cố định: Net Deposit / Net Withdraw / Actual Balance / PNL / Commission */}
           <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
             <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
               <h3 className="font-semibold text-slate-900">Tài khoản ({accounts.length})</h3>
-              {viewMode === 'overall' && totals.floating !== 0 && (
-                <span className={'text-sm font-medium ' + (totals.floating >= 0 ? 'text-emerald-600' : 'text-red-600')}>
-                  Floating: {fmtPnL(totals.floating)}
-                </span>
-              )}
+              <span className="text-xs text-slate-400">
+                {viewMode === 'overall' ? 'Toàn bộ thời gian' : formatDMY(startDate) + ' → ' + formatDMY(endDate)}
+              </span>
             </div>
 
             {accounts.length === 0 ? (
@@ -530,61 +620,60 @@ export default function DashboardPage() {
                   <thead>
                     <tr className="text-xs text-slate-400 uppercase border-b border-slate-100">
                       <th className="px-6 py-3 text-left">Tài khoản</th>
-                      <th className="px-6 py-3 text-right">{viewMode === 'range' ? 'Balance cuối kỳ' : 'Balance'}</th>
-                      {viewMode === 'overall' && <th className="px-6 py-3 text-right">Floating</th>}
                       <th className="px-6 py-3 text-right">Net Deposit</th>
-                      <th className="px-6 py-3 text-right">{viewMode === 'range' ? 'PnL kỳ' : 'PnL'}</th>
-                      <th className="px-6 py-3 text-right">{viewMode === 'range' ? 'Số lệnh' : 'Lệnh mở'}</th>
-                      <th className="px-6 py-3 text-right">Đòn bẩy</th>
+                      <th className="px-6 py-3 text-right">Net Withdraw</th>
+                      <th className="px-6 py-3 text-right">Actual Balance</th>
+                      <th className="px-6 py-3 text-right">PNL</th>
+                      <th className="px-6 py-3 text-right">Commission</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {accounts.map(a => (
-                      <tr key={a.login} className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
-                        <td className="px-6 py-4">
-                          <div className="flex items-center gap-2">
-                            <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: COLORS[a.label] || '#94a3b8' }} />
-                            <div>
-                              <p className="font-medium text-slate-900">{a.label}</p>
-                              <p className="text-xs text-slate-400">{a.login}</p>
+                    {accounts.map(a => {
+                      const m = accountMetrics[a.label] || { netDeposit: 0, netWithdraw: 0, pnl: 0, commission: 0 }
+                      return (
+                        <tr key={a.login} className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
+                          <td className="px-6 py-4">
+                            <div className="flex items-center gap-2">
+                              <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: COLORS[a.label] || '#94a3b8' }} />
+                              <div>
+                                <p className="font-medium text-slate-900">{a.label}</p>
+                                <p className="text-xs text-slate-400">{a.login}</p>
+                              </div>
                             </div>
-                          </div>
-                        </td>
-
-                        {viewMode === 'overall' ? (
-                          <>
-                            <td className="px-6 py-4 text-right text-slate-700">{fmt(a.balance, a.currency)}</td>
-                            <td className={'px-6 py-4 text-right ' + (a.floating_pnl >= 0 ? 'text-emerald-600' : 'text-red-600')}>
-                              {fmtPnL(a.floating_pnl)}
-                            </td>
-                            <td className="px-6 py-4 text-right text-slate-700">{fmt(a.baseline)}</td>
-                            <td className={'px-6 py-4 text-right font-semibold ' + (a.pnl_vs_baseline >= 0 ? 'text-emerald-600' : 'text-red-600')}>
-                              {fmtPnL(a.pnl_vs_baseline)}
-                              <span className="text-xs font-normal ml-1 opacity-60">
-                                {'(' + fmtPct(a.pnl_vs_baseline, a.baseline) + ')'}
-                              </span>
-                            </td>
-                            <td className="px-6 py-4 text-right text-slate-700">{a.open_positions}</td>
-                            <td className="px-6 py-4 text-right text-slate-400">{'1:' + a.leverage}</td>
-                          </>
-                        ) : (
-                          <>
-                            <td className="px-6 py-4 text-right text-slate-700">
-                              {chartLoading ? '...' : fmt(accountRangeStats[a.label]?.balance || 0, a.currency)}
-                            </td>
-                            <td className="px-6 py-4 text-right text-slate-700">{fmt(a.baseline)}</td>
-                            <td className={'px-6 py-4 text-right font-semibold ' + ((accountRangeStats[a.label]?.pnl || 0) >= 0 ? 'text-emerald-600' : 'text-red-600')}>
-                              {chartLoading ? '...' : fmtPnL(accountRangeStats[a.label]?.pnl || 0)}
-                            </td>
-                            <td className="px-6 py-4 text-right text-slate-700">
-                              {chartLoading ? '...' : (accountRangeStats[a.label]?.deals || 0) + ' lệnh'}
-                            </td>
-                            <td className="px-6 py-4 text-right text-slate-400">{'1:' + a.leverage}</td>
-                          </>
-                        )}
-                      </tr>
-                    ))}
+                          </td>
+                          <td className="px-6 py-4 text-right text-slate-700">
+                            {tableLoading ? '...' : fmt(m.netDeposit, a.currency)}
+                          </td>
+                          <td className="px-6 py-4 text-right text-slate-700">
+                            {tableLoading ? '...' : fmt(m.netWithdraw, a.currency)}
+                          </td>
+                          <td className="px-6 py-4 text-right font-medium text-slate-900">
+                            {fmt(a.balance, a.currency)}
+                          </td>
+                          <td className={'px-6 py-4 text-right font-semibold ' + (tableLoading ? 'text-slate-400' : m.pnl >= 0 ? 'text-emerald-600' : 'text-red-600')}>
+                            {tableLoading ? '...' : fmtPnL(m.pnl)}
+                          </td>
+                          <td className="px-6 py-4 text-right text-slate-500">
+                            {tableLoading ? '...' : fmt(m.commission, a.currency)}
+                          </td>
+                        </tr>
+                      )
+                    })}
                   </tbody>
+                  <tfoot>
+                    <tr className="bg-slate-50 font-semibold text-slate-900 border-t border-slate-200">
+                      <td className="px-6 py-3">Tổng</td>
+                      <td className="px-6 py-3 text-right">{tableLoading ? '...' : fmt(metricTotals.netDeposit)}</td>
+                      <td className="px-6 py-3 text-right">{tableLoading ? '...' : fmt(metricTotals.netWithdraw)}</td>
+                      <td className="px-6 py-3 text-right">{fmt(metricTotals.balance)}</td>
+                      <td className={'px-6 py-3 text-right ' + (tableLoading ? '' : metricTotals.pnl >= 0 ? 'text-emerald-600' : 'text-red-600')}>
+                        {tableLoading ? '...' : fmtPnL(metricTotals.pnl)}
+                      </td>
+                      <td className="px-6 py-3 text-right text-slate-500">
+                        {tableLoading ? '...' : fmt(metricTotals.commission)}
+                      </td>
+                    </tr>
+                  </tfoot>
                 </table>
               </div>
             )}
