@@ -92,6 +92,27 @@ interface AccountMetric {
   finalProfit: number
 }
 
+type TimelinePreset =
+  | 'lifetime'
+  | 'lastmonth'
+  | 'thismonth'
+  | 'thisweek'
+  | 'lastweek'
+  | 'yesterday'
+  | 'today'
+  | 'custom'
+
+const TIMELINE_OPTIONS: { value: TimelinePreset; label: string }[] = [
+  { value: 'lifetime', label: 'Lifetime' },
+  { value: 'lastmonth', label: 'Last Month' },
+  { value: 'thismonth', label: 'This Month' },
+  { value: 'thisweek', label: 'This Week' },
+  { value: 'lastweek', label: 'Last Week' },
+  { value: 'yesterday', label: 'Yesterday' },
+  { value: 'today', label: 'Today' },
+  { value: 'custom', label: 'Custom' },
+]
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function getEmailFromCookie(): string | null {
@@ -148,6 +169,68 @@ function formatDMY(iso: string): string {
   return d + '/' + m + '/' + y
 }
 
+function addDays(d: Date, days: number): Date {
+  const copy = new Date(d.getFullYear(), d.getMonth(), d.getDate())
+  copy.setDate(copy.getDate() + days)
+  return copy
+}
+
+function startOfWeekMonday(d: Date): Date {
+  const copy = new Date(d.getFullYear(), d.getMonth(), d.getDate())
+  const day = copy.getDay()
+  const diff = day === 0 ? -6 : 1 - day
+  copy.setDate(copy.getDate() + diff)
+  return copy
+}
+
+function getPresetDateRange(preset: TimelinePreset, today: Date): { start: string; end: string } {
+  const current = new Date(today.getFullYear(), today.getMonth(), today.getDate())
+
+  if (preset === 'today') {
+    return { start: toISODate(current), end: toISODate(current) }
+  }
+
+  if (preset === 'yesterday') {
+    const y = addDays(current, -1)
+    return { start: toISODate(y), end: toISODate(y) }
+  }
+
+  if (preset === 'thisweek') {
+    const start = startOfWeekMonday(current)
+    const end = addDays(start, 6)
+    return { start: toISODate(start), end: toISODate(end) }
+  }
+
+  if (preset === 'lastweek') {
+    const thisWeekStart = startOfWeekMonday(current)
+    const start = addDays(thisWeekStart, -7)
+    const end = addDays(thisWeekStart, -1)
+    return { start: toISODate(start), end: toISODate(end) }
+  }
+
+  if (preset === 'thismonth') {
+    const start = new Date(current.getFullYear(), current.getMonth(), 1)
+    return { start: toISODate(start), end: toISODate(current) }
+  }
+
+  if (preset === 'lastmonth') {
+    const start = new Date(current.getFullYear(), current.getMonth() - 1, 1)
+    const end = new Date(current.getFullYear(), current.getMonth(), 0)
+    return { start: toISODate(start), end: toISODate(end) }
+  }
+
+  // Lifetime không filter theo ngày cho metrics/table. Date range chỉ giữ để chart không fetch quá dài.
+  const start = new Date(current.getFullYear(), current.getMonth(), 1)
+  return { start: toISODate(start), end: toISODate(current) }
+}
+
+function getTimelineLabel(preset: TimelinePreset, start: string, end: string): string {
+  if (preset === 'lifetime') return 'Lifetime'
+  const found = TIMELINE_OPTIONS.find(o => o.value === preset)
+  const label = found?.label || 'Custom'
+  return label + ': ' + formatDMY(start) + ' → ' + formatDMY(end)
+}
+
 // Liệt kê các (year, month) phủ khoảng [start, end] để gọi API daily-* theo từng tháng
 function getMonthsInRange(start: string, end: string): { year: number; month: number }[] {
   const startD = new Date(start + 'T00:00:00')
@@ -192,22 +275,30 @@ function StatCard({ label, value, sub, color }: {
 }
 
 function RangeControls({
-  startDate, endDate, onStartChange, onEndChange, today,
+  startDate, endDate, onStartChange, onEndChange, today, disabled = false,
 }: {
   startDate: string
   endDate: string
   onStartChange: (v: string) => void
   onEndChange: (v: string) => void
   today: string
+  disabled?: boolean
 }) {
+  const inputClass =
+    'text-sm border border-slate-200 rounded-lg px-3 py-1.5 outline-none focus:border-slate-400 ' +
+    (disabled
+      ? 'bg-slate-50 text-slate-400 cursor-not-allowed'
+      : 'bg-white text-slate-700')
+
   return (
     <div className="flex items-center gap-2">
       <input
         type="date"
         value={startDate}
         max={endDate}
+        disabled={disabled}
         onChange={e => onStartChange(e.target.value)}
-        className="text-sm border border-slate-200 rounded-lg px-3 py-1.5 text-slate-700 bg-white outline-none focus:border-slate-400"
+        className={inputClass}
       />
       <span className="text-slate-300 text-sm">→</span>
       <input
@@ -215,9 +306,53 @@ function RangeControls({
         value={endDate}
         min={startDate}
         max={today}
+        disabled={disabled}
         onChange={e => onEndChange(e.target.value)}
-        className="text-sm border border-slate-200 rounded-lg px-3 py-1.5 text-slate-700 bg-white outline-none focus:border-slate-400"
+        className={inputClass}
       />
+    </div>
+  )
+}
+
+function TimelineControls({
+  preset, startDate, endDate, today, onPresetChange, onStartChange, onEndChange,
+}: {
+  preset: TimelinePreset
+  startDate: string
+  endDate: string
+  today: string
+  onPresetChange: (v: TimelinePreset) => void
+  onStartChange: (v: string) => void
+  onEndChange: (v: string) => void
+}) {
+  const isCustom = preset === 'custom'
+
+  return (
+    <div className="flex items-center gap-2 flex-wrap">
+      <select
+        value={preset}
+        onChange={e => onPresetChange(e.target.value as TimelinePreset)}
+        className="text-sm border border-slate-200 rounded-lg px-3 py-1.5 text-slate-700 bg-white outline-none focus:border-slate-400"
+      >
+        {TIMELINE_OPTIONS.map(option => (
+          <option key={option.value} value={option.value}>{option.label}</option>
+        ))}
+      </select>
+
+      {preset === 'lifetime' ? (
+        <div className="text-sm border border-slate-200 rounded-lg px-3 py-1.5 bg-slate-50 text-slate-400 cursor-not-allowed">
+          All time
+        </div>
+      ) : (
+        <RangeControls
+          startDate={startDate}
+          endDate={endDate}
+          onStartChange={onStartChange}
+          onEndChange={onEndChange}
+          today={today}
+          disabled={!isCustom}
+        />
+      )}
     </div>
   )
 }
@@ -235,8 +370,10 @@ export default function DashboardPage() {
   const [loading, setLoading]   = useState(true)
   const [error, setError]       = useState<string | null>(null)
 
-  // 'lifetime' = lấy hết (all-time), 'range' = lọc theo khoảng ngày đã chọn
-  const [viewMode, setViewMode] = useState<'lifetime' | 'range'>('lifetime')
+  // Timeline preset dùng chung cho Tổng quan, bảng tài khoản và biểu đồ.
+  // Lifetime = metrics/table lấy all-time; các preset khác = lọc theo startDate/endDate.
+  const [timelinePreset, setTimelinePreset] = useState<TimelinePreset>('lifetime')
+  const viewMode: 'lifetime' | 'range' = timelinePreset === 'lifetime' ? 'lifetime' : 'range'
 
   const [startDate, setStartDate] = useState(firstOfMonthISO)
   const [endDate, setEndDate]     = useState(todayISO)
@@ -252,13 +389,24 @@ export default function DashboardPage() {
   const [rawDeals, setRawDeals]     = useState<Record<string, DealRow[]>>({})
   const [tableLoading, setTableLoading] = useState(false)
 
-  function handleStartChange(v: string) {
-    setStartDate(v)
-    setViewMode('range')
+  function handlePresetChange(preset: TimelinePreset) {
+    setTimelinePreset(preset)
+
+    if (preset === 'custom') return
+
+    const range = getPresetDateRange(preset, new Date())
+    setStartDate(range.start)
+    setEndDate(range.end)
   }
+
+  function handleStartChange(v: string) {
+    setTimelinePreset('custom')
+    setStartDate(v)
+  }
+
   function handleEndChange(v: string) {
+    setTimelinePreset('custom')
     setEndDate(v)
-    setViewMode('range')
   }
 
   // Step 1 — email từ CF cookie
@@ -448,6 +596,8 @@ export default function DashboardPage() {
     { netDeposit: 0, netWithdraw: 0, pnl: 0, commission: 0, finalProfit: 0, balance: 0 }
   )
 
+  const timelineLabel = getTimelineLabel(timelinePreset, startDate, endDate)
+
   // Accounts hiển thị trên chart
   const chartLabels =
     chartAccount === 'all'
@@ -571,26 +721,15 @@ export default function DashboardPage() {
           <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
             <h2 className="text-2xl font-bold text-slate-900">Tổng quan</h2>
 
-            <div className="flex items-center gap-2 flex-wrap">
-              <button
-                onClick={() => setViewMode('lifetime')}
-                className={
-                  'text-sm px-4 py-1.5 rounded-lg font-medium transition-colors ' +
-                  (viewMode === 'lifetime'
-                    ? 'bg-slate-900 text-white'
-                    : 'bg-white border border-slate-200 text-slate-500 hover:border-slate-400')
-                }
-              >
-                Lifetime
-              </button>
-              <RangeControls
-                startDate={startDate}
-                endDate={endDate}
-                onStartChange={handleStartChange}
-                onEndChange={handleEndChange}
-                today={todayISO}
-              />
-            </div>
+            <TimelineControls
+              preset={timelinePreset}
+              startDate={startDate}
+              endDate={endDate}
+              today={todayISO}
+              onPresetChange={handlePresetChange}
+              onStartChange={handleStartChange}
+              onEndChange={handleEndChange}
+            />
           </div>
 
           {/* Stat cards — lấy theo Lifetime hoặc khoảng ngày đang chọn */}
@@ -598,12 +737,12 @@ export default function DashboardPage() {
             <StatCard
               label="Net Deposit"
               value={tableLoading ? '...' : fmt(metricTotals.netDeposit)}
-              sub={viewMode === 'lifetime' ? 'Lifetime' : formatDMY(startDate) + ' → ' + formatDMY(endDate)}
+              sub={timelineLabel}
             />
             <StatCard
               label="Net Withdraw"
               value={tableLoading ? '...' : fmt(metricTotals.netWithdraw)}
-              sub={viewMode === 'lifetime' ? 'Lifetime' : formatDMY(startDate) + ' → ' + formatDMY(endDate)}
+              sub={timelineLabel}
             />
             <StatCard
               label="PNL"
@@ -628,7 +767,7 @@ export default function DashboardPage() {
             <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
               <h3 className="font-semibold text-slate-900">Tài khoản ({accounts.length})</h3>
               <span className="text-xs text-slate-400">
-                {viewMode === 'lifetime' ? 'Toàn bộ thời gian' : formatDMY(startDate) + ' → ' + formatDMY(endDate)}
+                {timelineLabel}
               </span>
             </div>
 
@@ -735,7 +874,7 @@ export default function DashboardPage() {
           </div>
         </section>
 
-        {/* ── PHÂN TÍCH THEO KHOẢNG NGÀY ── */}
+        {/* ── PHÂN TÍCH THEO TIMELINE ── */}
         <section>
           <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
             <h2 className="text-2xl font-bold text-slate-900">Phân tích</h2>
@@ -750,12 +889,14 @@ export default function DashboardPage() {
                   <option key={a.login} value={a.label}>{a.label}</option>
                 ))}
               </select>
-              <RangeControls
+              <TimelineControls
+                preset={timelinePreset}
                 startDate={startDate}
                 endDate={endDate}
+                today={todayISO}
+                onPresetChange={handlePresetChange}
                 onStartChange={handleStartChange}
                 onEndChange={handleEndChange}
-                today={todayISO}
               />
             </div>
           </div>
