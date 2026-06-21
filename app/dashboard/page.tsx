@@ -89,6 +89,7 @@ interface AccountMetric {
   netWithdraw: number
   pnl: number
   commission: number
+  finalProfit: number
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -124,13 +125,14 @@ function fmtPnL(value: number): string {
   return (value >= 0 ? '+' : '') + fmt(value)
 }
 
-function fmtPct(pnl: number, baseline: number): string {
-  if (baseline === 0) return '—'
-  return ((pnl / baseline) * 100).toFixed(1) + '%'
-}
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100
+}
+
+function getFinalProfit(pnl: number, commission: number): number {
+  // Commission từ API đang là số âm, nên Final Profit = PNL + Commission
+  return pnl + commission
 }
 
 function pad2(n: number): string {
@@ -160,9 +162,9 @@ function getMonthsInRange(start: string, end: string): { year: number; month: nu
   return months
 }
 
-// Có nằm trong khoảng đã chọn không — 'overall' = luôn true (lấy hết, all-time)
-function inRange(timeStr: string, mode: 'overall' | 'range', start: string, end: string): boolean {
-  if (mode === 'overall') return true
+// Có nằm trong khoảng đã chọn không — 'lifetime' = luôn true (lấy hết, all-time)
+function inRange(timeStr: string, mode: 'lifetime' | 'range', start: string, end: string): boolean {
+  if (mode === 'lifetime') return true
   const d = timeStr.slice(0, 10)
   return d >= start && d <= end
 }
@@ -233,8 +235,8 @@ export default function DashboardPage() {
   const [loading, setLoading]   = useState(true)
   const [error, setError]       = useState<string | null>(null)
 
-  // 'overall' = lấy hết (all-time), 'range' = lọc theo khoảng ngày đã chọn
-  const [viewMode, setViewMode] = useState<'overall' | 'range'>('overall')
+  // 'lifetime' = lấy hết (all-time), 'range' = lọc theo khoảng ngày đã chọn
+  const [viewMode, setViewMode] = useState<'lifetime' | 'range'>('lifetime')
 
   const [startDate, setStartDate] = useState(firstOfMonthISO)
   const [endDate, setEndDate]     = useState(todayISO)
@@ -357,12 +359,12 @@ export default function DashboardPage() {
   }, [accounts])
 
   // Step 5 — fetch raw deals (profit/commission/swap tách riêng) cho từng account đã phân quyền
-  const fetchRawDeals = useCallback(async (accs: Account[], start: string, mode: 'overall' | 'range') => {
+  const fetchRawDeals = useCallback(async (accs: Account[], start: string, mode: 'lifetime' | 'range') => {
     if (!accs.length) return
     setTableLoading(true)
     try {
       const daysBack =
-        mode === 'overall'
+        mode === 'lifetime'
           ? 3650
           : Math.max(2, Math.ceil((new Date(todayISO).getTime() - new Date(start).getTime()) / 86400000) + 2)
 
@@ -391,16 +393,6 @@ export default function DashboardPage() {
 
   // ─── Derived ─────────────────────────────────────────────────────────────
 
-  const totals = accounts.reduce(
-    (acc, a) => ({
-      balance:  acc.balance  + a.balance,
-      baseline: acc.baseline + a.baseline,
-      pnl:      acc.pnl      + a.pnl_vs_baseline,
-      floating: acc.floating + a.floating_pnl,
-    }),
-    { balance: 0, baseline: 0, pnl: 0, floating: 0 }
-  )
-
   // Per-account: Net Deposit / Net Withdraw / PNL / Commission — theo viewMode đã chọn
   const accountMetrics: Record<string, AccountMetric> = accounts.reduce((map, a) => {
     const ops   = operations[a.label] || []
@@ -422,27 +414,38 @@ export default function DashboardPage() {
       commission += d.commission
     }
 
+    const finalProfit = getFinalProfit(pnl, commission)
+
     map[a.label] = {
-      netDeposit:  round2(netDeposit),
-      netWithdraw: round2(netWithdraw),
-      pnl:         round2(pnl),
-      commission:  round2(commission),
+      netDeposit:   round2(netDeposit),
+      netWithdraw:  round2(netWithdraw),
+      pnl:          round2(pnl),
+      commission:   round2(commission),
+      finalProfit:  round2(finalProfit),
     }
     return map
   }, {} as Record<string, AccountMetric>)
 
   const metricTotals = accounts.reduce(
     (acc, a) => {
-      const m = accountMetrics[a.label] || { netDeposit: 0, netWithdraw: 0, pnl: 0, commission: 0 }
+      const m = accountMetrics[a.label] || {
+        netDeposit: 0,
+        netWithdraw: 0,
+        pnl: 0,
+        commission: 0,
+        finalProfit: 0,
+      }
+
       return {
         netDeposit:  acc.netDeposit  + m.netDeposit,
         netWithdraw: acc.netWithdraw + m.netWithdraw,
         pnl:         acc.pnl         + m.pnl,
         commission:  acc.commission  + m.commission,
+        finalProfit: acc.finalProfit + m.finalProfit,
         balance:     acc.balance     + a.balance,
       }
     },
-    { netDeposit: 0, netWithdraw: 0, pnl: 0, commission: 0, balance: 0 }
+    { netDeposit: 0, netWithdraw: 0, pnl: 0, commission: 0, finalProfit: 0, balance: 0 }
   )
 
   // Accounts hiển thị trên chart
@@ -570,15 +573,15 @@ export default function DashboardPage() {
 
             <div className="flex items-center gap-2 flex-wrap">
               <button
-                onClick={() => setViewMode('overall')}
+                onClick={() => setViewMode('lifetime')}
                 className={
                   'text-sm px-4 py-1.5 rounded-lg font-medium transition-colors ' +
-                  (viewMode === 'overall'
+                  (viewMode === 'lifetime'
                     ? 'bg-slate-900 text-white'
                     : 'bg-white border border-slate-200 text-slate-500 hover:border-slate-400')
                 }
               >
-                Total
+                Lifetime
               </button>
               <RangeControls
                 startDate={startDate}
@@ -590,23 +593,42 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* Stat cards */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-            <StatCard label="Tổng Balance" value={fmt(totals.balance)} sub="Thời gian thực" />
-            <StatCard label="Net Deposit" value={fmt(totals.baseline)} sub="Tổng vốn đã nạp" />
+          {/* Stat cards — lấy theo Lifetime hoặc khoảng ngày đang chọn */}
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">
             <StatCard
-              label="PnL vs Baseline"
-              value={fmtPnL(totals.pnl) + ' (' + fmtPct(totals.pnl, totals.baseline) + ')'}
-              color={totals.pnl >= 0 ? 'green' : 'red'}
+              label="Net Deposit"
+              value={tableLoading ? '...' : fmt(metricTotals.netDeposit)}
+              sub={viewMode === 'lifetime' ? 'Lifetime' : formatDMY(startDate) + ' → ' + formatDMY(endDate)}
+            />
+            <StatCard
+              label="Net Withdraw"
+              value={tableLoading ? '...' : fmt(metricTotals.netWithdraw)}
+              sub={viewMode === 'lifetime' ? 'Lifetime' : formatDMY(startDate) + ' → ' + formatDMY(endDate)}
+            />
+            <StatCard
+              label="PNL"
+              value={tableLoading ? '...' : fmtPnL(metricTotals.pnl)}
+              color={metricTotals.pnl >= 0 ? 'green' : 'red'}
+            />
+            <StatCard
+              label="Commission"
+              value={tableLoading ? '...' : fmt(metricTotals.commission)}
+              color="neutral"
+            />
+            <StatCard
+              label="Final Profit"
+              value={tableLoading ? '...' : fmtPnL(metricTotals.finalProfit)}
+              sub="PNL + Commission"
+              color={metricTotals.finalProfit >= 0 ? 'green' : 'red'}
             />
           </div>
 
-          {/* Account table — format cố định: Net Deposit / Net Withdraw / Actual Balance / PNL / Commission */}
+          {/* Account table — format cố định: Net Deposit / Net Withdraw / Actual Balance / PNL / Commission / Final Profit */}
           <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
             <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
               <h3 className="font-semibold text-slate-900">Tài khoản ({accounts.length})</h3>
               <span className="text-xs text-slate-400">
-                {viewMode === 'overall' ? 'Toàn bộ thời gian' : formatDMY(startDate) + ' → ' + formatDMY(endDate)}
+                {viewMode === 'lifetime' ? 'Toàn bộ thời gian' : formatDMY(startDate) + ' → ' + formatDMY(endDate)}
               </span>
             </div>
 
@@ -625,11 +647,12 @@ export default function DashboardPage() {
                       <th className="px-6 py-3 text-right">Actual Balance</th>
                       <th className="px-6 py-3 text-right">PNL</th>
                       <th className="px-6 py-3 text-right">Commission</th>
+                      <th className="px-6 py-3 text-right">Final Profit</th>
                     </tr>
                   </thead>
                   <tbody>
                     {accounts.map(a => {
-                      const m = accountMetrics[a.label] || { netDeposit: 0, netWithdraw: 0, pnl: 0, commission: 0 }
+                      const m = accountMetrics[a.label] || { netDeposit: 0, netWithdraw: 0, pnl: 0, commission: 0, finalProfit: 0 }
                       return (
                         <tr key={a.login} className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
                           <td className="px-6 py-4">
@@ -656,6 +679,22 @@ export default function DashboardPage() {
                           <td className="px-6 py-4 text-right text-slate-500">
                             {tableLoading ? '...' : fmt(m.commission, a.currency)}
                           </td>
+                          <td className="px-6 py-4 text-right">
+                            {tableLoading ? (
+                              <span className="text-slate-400">...</span>
+                            ) : (
+                              <span
+                                className={
+                                  'inline-flex justify-end rounded-lg px-3 py-1 font-bold ' +
+                                  (m.finalProfit >= 0
+                                    ? 'bg-emerald-100 text-emerald-700'
+                                    : 'bg-red-100 text-red-700')
+                                }
+                              >
+                                {fmtPnL(m.finalProfit)}
+                              </span>
+                            )}
+                          </td>
                         </tr>
                       )
                     })}
@@ -671,6 +710,22 @@ export default function DashboardPage() {
                       </td>
                       <td className="px-6 py-3 text-right text-slate-500">
                         {tableLoading ? '...' : fmt(metricTotals.commission)}
+                      </td>
+                      <td className="px-6 py-3 text-right">
+                        {tableLoading ? (
+                          <span className="text-slate-400">...</span>
+                        ) : (
+                          <span
+                            className={
+                              'inline-flex justify-end rounded-lg px-3 py-1 font-bold ' +
+                              (metricTotals.finalProfit >= 0
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-red-100 text-red-800')
+                            }
+                          >
+                            {fmtPnL(metricTotals.finalProfit)}
+                          </span>
+                        )}
                       </td>
                     </tr>
                   </tfoot>
