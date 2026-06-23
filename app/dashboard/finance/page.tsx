@@ -123,6 +123,33 @@ interface CashFlowResponse {
   items: CashFlowItem[]
 }
 
+
+interface FinanceAccountItem {
+  account_login: number
+  account_label: string
+  last_snapshot_time?: string | null
+}
+
+interface FinanceAccountsResponse {
+  total: number
+  items: FinanceAccountItem[]
+}
+
+type CapitalForm = {
+  accountKey: string
+  client_name: string
+  period_type: 'NORMAL' | 'ONBOARDING'
+  onboard_date: string
+  capital_base: string
+  previous_capital_base: string
+  client_deposit: string
+  client_withdraw: string
+  reinvest_profit: string
+  client_profit_withdraw: string
+  manager_share_withdraw: string
+  note: string
+}
+
 function currentPeriod(): string {
   const now = new Date()
   const month = `${now.getMonth() + 1}`.padStart(2, '0')
@@ -191,6 +218,20 @@ async function fetchJson<T>(url: string): Promise<T> {
   return response.json()
 }
 
+
+async function postJson<T>(url: string, payload: unknown): Promise<T> {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) {
+    const text = await response.text().catch(() => '')
+    throw new Error(`HTTP ${response.status}${text ? ` · ${text.slice(0, 160)}` : ''}`)
+  }
+  return response.json()
+}
+
 function StatCard({
   title,
   value,
@@ -234,20 +275,39 @@ export default function FinanceDashboardPage() {
   const [cashFlows, setCashFlows] = useState<CashFlowResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [financeAccounts, setFinanceAccounts] = useState<FinanceAccountItem[]>([])
+  const [actionLoading, setActionLoading] = useState(false)
+  const [actionMessage, setActionMessage] = useState<string | null>(null)
+  const [capitalForm, setCapitalForm] = useState<CapitalForm>({
+    accountKey: '',
+    client_name: '',
+    period_type: 'NORMAL',
+    onboard_date: '',
+    capital_base: '',
+    previous_capital_base: '',
+    client_deposit: '0',
+    client_withdraw: '0',
+    reinvest_profit: '0',
+    client_profit_withdraw: '0',
+    manager_share_withdraw: '0',
+    note: '',
+  })
 
   const loadData = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
       const query = `api_key=${encodeURIComponent(API_KEY)}&period=${encodeURIComponent(period)}`
-      const [overviewData, capitalData, cashData] = await Promise.all([
+      const [overviewData, capitalData, cashData, accountData] = await Promise.all([
         fetchJson<FinanceOverviewResponse>(`${API_URL}/api/finance/overview?${query}`),
         fetchJson<CapitalBaseResponse>(`${API_URL}/api/finance/capital-base?${query}`),
         fetchJson<CashFlowResponse>(`${API_URL}/api/finance/cash-flows?${query}`),
+        fetchJson<FinanceAccountsResponse>(`${API_URL}/api/finance/accounts?api_key=${encodeURIComponent(API_KEY)}`),
       ])
       setOverview(overviewData)
       setCapitalBase(capitalData)
       setCashFlows(cashData)
+      setFinanceAccounts(accountData.items ?? [])
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error')
     } finally {
@@ -267,6 +327,114 @@ export default function FinanceDashboardPage() {
     if (summary.loss_accounts > 0 || summary.split_only_accounts > 0) return 'yellow'
     return 'green'
   }, [summary])
+
+  const selectedAccount = useMemo(() => {
+    const [login, ...labelParts] = capitalForm.accountKey.split('|')
+    if (!login) return null
+    return {
+      account_login: Number(login),
+      account_label: labelParts.join('|'),
+    }
+  }, [capitalForm.accountKey])
+
+  const computedBaseReturnRule = useMemo(() => {
+    if (capitalForm.period_type === 'NORMAL') return 'Eligible 3%'
+    if (!capitalForm.onboard_date) return 'No 3% until onboard date is set'
+    const day = Number(capitalForm.onboard_date.slice(-2))
+    return day < 5 ? 'Onboard before day 5: Eligible 3%' : 'Onboard from day 5: No 3%, split 50/50 only'
+  }, [capitalForm.period_type, capitalForm.onboard_date])
+
+  function updateCapitalForm<K extends keyof CapitalForm>(key: K, value: CapitalForm[K]) {
+    setCapitalForm((prev) => ({ ...prev, [key]: value }))
+  }
+
+  async function handleSaveCapitalBase() {
+    if (!selectedAccount) {
+      setActionMessage('Hãy chọn account trước khi lưu Capital Base.')
+      return
+    }
+    setActionLoading(true)
+    setActionMessage(null)
+    try {
+      await postJson(`${API_URL}/api/finance/capital-base/upsert?api_key=${encodeURIComponent(API_KEY)}`, {
+        account_login: selectedAccount.account_login,
+        account_label: selectedAccount.account_label,
+        client_name: capitalForm.client_name || null,
+        period,
+        period_type: capitalForm.period_type,
+        onboard_date: capitalForm.period_type === 'ONBOARDING' ? capitalForm.onboard_date || null : null,
+        capital_base: Number(capitalForm.capital_base || 0),
+        previous_capital_base: Number(capitalForm.previous_capital_base || 0),
+        return_rate: 0.03,
+        split_client: 0.5,
+        split_manager: 0.5,
+        client_deposit: Number(capitalForm.client_deposit || 0),
+        client_withdraw: Number(capitalForm.client_withdraw || 0),
+        reinvest_profit: Number(capitalForm.reinvest_profit || 0),
+        client_profit_withdraw: Number(capitalForm.client_profit_withdraw || 0),
+        manager_share_withdraw: Number(capitalForm.manager_share_withdraw || 0),
+        note: capitalForm.note,
+        status: 'CONFIRMED',
+      })
+      setActionMessage('Đã lưu Capital Base. Dashboard đang refresh lại data.')
+      await loadData()
+    } catch (err) {
+      setActionMessage(err instanceof Error ? err.message : 'Save failed')
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  async function handleGenerateSettlements() {
+    setActionLoading(true)
+    setActionMessage(null)
+    try {
+      const result = await postJson<{ generated: number; skipped_locked: number }>(
+        `${API_URL}/api/finance/settlements/generate?api_key=${encodeURIComponent(API_KEY)}&period=${encodeURIComponent(period)}`,
+        {}
+      )
+      setActionMessage(`Generated ${result.generated} settlement(s). Skipped locked: ${result.skipped_locked}.`)
+      await loadData()
+    } catch (err) {
+      setActionMessage(err instanceof Error ? err.message : 'Generate failed')
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  async function handleLockSettlement(item: FinanceItem) {
+    setActionLoading(true)
+    setActionMessage(null)
+    try {
+      await postJson(`${API_URL}/api/finance/settlements/lock?api_key=${encodeURIComponent(API_KEY)}`, {
+        account_login: item.account_login,
+        period: item.period,
+      })
+      setActionMessage(`Đã lock settlement cho ${item.account_label}.`)
+      await loadData()
+    } catch (err) {
+      setActionMessage(err instanceof Error ? err.message : 'Lock failed')
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  async function handleMarkPaid(item: FinanceItem) {
+    setActionLoading(true)
+    setActionMessage(null)
+    try {
+      await postJson(`${API_URL}/api/finance/settlements/mark-paid?api_key=${encodeURIComponent(API_KEY)}`, {
+        account_login: item.account_login,
+        period: item.period,
+      })
+      setActionMessage(`Đã mark PAID cho ${item.account_label}.`)
+      await loadData()
+    } catch (err) {
+      setActionMessage(err instanceof Error ? err.message : 'Mark paid failed')
+    } finally {
+      setActionLoading(false)
+    }
+  }
 
   return (
     <main className="min-h-screen bg-white px-4 py-6 text-slate-900 md:px-8 lg:px-10">
@@ -320,6 +488,150 @@ export default function FinanceDashboardPage() {
           <StatCard title="Risk" value={`${summary?.loss_accounts ?? 0} loss`} sub={`${summary?.high_loss_accounts ?? 0} high loss`} tone={actionTone} />
         </section>
 
+        <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900">Finance Admin</h2>
+              <p className="mt-1 text-sm text-slate-500">Nhập/sửa Capital Base trực tiếp trên dashboard, sau đó generate settlement cho kỳ đang chọn.</p>
+            </div>
+            <button
+              onClick={handleGenerateSettlements}
+              disabled={actionLoading}
+              className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Generate Settlements
+            </button>
+          </div>
+
+          {actionMessage && (
+            <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">
+              {actionMessage}
+            </div>
+          )}
+
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <label className="space-y-1 text-sm">
+              <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Account</span>
+              <select
+                value={capitalForm.accountKey}
+                onChange={(e) => updateCapitalForm('accountKey', e.target.value)}
+                className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+              >
+                <option value="">Select account</option>
+                {financeAccounts.map((account) => (
+                  <option key={`${account.account_login}-${account.account_label}`} value={`${account.account_login}|${account.account_label}`}>
+                    {account.account_label} · {account.account_login}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="space-y-1 text-sm">
+              <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Client Name</span>
+              <input
+                value={capitalForm.client_name}
+                onChange={(e) => updateCapitalForm('client_name', e.target.value)}
+                placeholder="Tên khách"
+                className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+              />
+            </label>
+
+            <label className="space-y-1 text-sm">
+              <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Period Type</span>
+              <select
+                value={capitalForm.period_type}
+                onChange={(e) => updateCapitalForm('period_type', e.target.value as CapitalForm['period_type'])}
+                className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+              >
+                <option value="NORMAL">NORMAL</option>
+                <option value="ONBOARDING">ONBOARDING</option>
+              </select>
+            </label>
+
+            <label className="space-y-1 text-sm">
+              <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Onboard Date</span>
+              <input
+                type="date"
+                value={capitalForm.onboard_date}
+                disabled={capitalForm.period_type !== 'ONBOARDING'}
+                onChange={(e) => updateCapitalForm('onboard_date', e.target.value)}
+                className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 disabled:bg-slate-100 disabled:text-slate-400"
+              />
+              <div className="text-xs text-slate-400">{computedBaseReturnRule}</div>
+            </label>
+
+            <label className="space-y-1 text-sm">
+              <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Capital Base</span>
+              <input
+                type="number"
+                value={capitalForm.capital_base}
+                onChange={(e) => updateCapitalForm('capital_base', e.target.value)}
+                placeholder="10000"
+                className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+              />
+            </label>
+
+            <label className="space-y-1 text-sm">
+              <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Previous Capital</span>
+              <input
+                type="number"
+                value={capitalForm.previous_capital_base}
+                onChange={(e) => updateCapitalForm('previous_capital_base', e.target.value)}
+                placeholder="0"
+                className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+              />
+            </label>
+
+            <label className="space-y-1 text-sm">
+              <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Deposit</span>
+              <input type="number" value={capitalForm.client_deposit} onChange={(e) => updateCapitalForm('client_deposit', e.target.value)} className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" />
+            </label>
+
+            <label className="space-y-1 text-sm">
+              <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Withdraw</span>
+              <input type="number" value={capitalForm.client_withdraw} onChange={(e) => updateCapitalForm('client_withdraw', e.target.value)} className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" />
+            </label>
+
+            <label className="space-y-1 text-sm">
+              <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Reinvest Profit</span>
+              <input type="number" value={capitalForm.reinvest_profit} onChange={(e) => updateCapitalForm('reinvest_profit', e.target.value)} className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" />
+            </label>
+
+            <label className="space-y-1 text-sm">
+              <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Profit Withdraw</span>
+              <input type="number" value={capitalForm.client_profit_withdraw} onChange={(e) => updateCapitalForm('client_profit_withdraw', e.target.value)} className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" />
+            </label>
+
+            <label className="space-y-1 text-sm">
+              <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Manager Withdraw</span>
+              <input type="number" value={capitalForm.manager_share_withdraw} onChange={(e) => updateCapitalForm('manager_share_withdraw', e.target.value)} className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" />
+            </label>
+
+            <label className="space-y-1 text-sm xl:col-span-2">
+              <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Note</span>
+              <input
+                value={capitalForm.note}
+                onChange={(e) => updateCapitalForm('note', e.target.value)}
+                placeholder="Ghi chú chốt vốn với khách"
+                className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+              />
+            </label>
+          </div>
+
+          <div className="mt-4 flex flex-wrap gap-3">
+            <button
+              onClick={handleSaveCapitalBase}
+              disabled={actionLoading}
+              className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Save Capital Base
+            </button>
+            <div className="text-xs text-slate-500">
+              Save chỉ lưu Capital Base. Bấm Generate Settlements để ghi lại settlement DRAFT cho kỳ này.
+            </div>
+          </div>
+        </section>
+
         <section className="grid gap-4 lg:grid-cols-3">
           <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm lg:col-span-2">
             <div className="mb-3 flex items-center justify-between gap-3">
@@ -340,6 +652,7 @@ export default function FinanceDashboardPage() {
                     <th className="border-b border-slate-200 px-3 py-3 text-right">Manager</th>
                     <th className="border-b border-slate-200 px-3 py-3">Risk</th>
                     <th className="border-b border-slate-200 px-3 py-3">Status</th>
+                    <th className="border-b border-slate-200 px-3 py-3">Action</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -371,6 +684,28 @@ export default function FinanceDashboardPage() {
                       </td>
                       <td className="border-b border-slate-100 px-3 py-3">
                         <Badge className={statusClass(item.status)}>{item.status}</Badge>
+                      </td>
+                      <td className="border-b border-slate-100 px-3 py-3">
+                        <div className="flex flex-col gap-2">
+                          {item.status !== 'LOCKED' && item.status !== 'PAID' && (
+                            <button
+                              onClick={() => handleLockSettlement(item)}
+                              disabled={actionLoading}
+                              className="rounded-lg border border-blue-200 bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-60"
+                            >
+                              Lock
+                            </button>
+                          )}
+                          {item.status !== 'PAID' && (
+                            <button
+                              onClick={() => handleMarkPaid(item)}
+                              disabled={actionLoading}
+                              className="rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-60"
+                            >
+                              Paid
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}
