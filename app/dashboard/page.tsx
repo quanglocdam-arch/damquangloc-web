@@ -92,6 +92,45 @@ interface AccountMetric {
   finalProfit: number
 }
 
+type HealthStatus = 'healthy' | 'warning' | 'critical'
+
+interface HealthAccountItem {
+  login: number
+  label: string
+  status: HealthStatus
+  last_snapshot_time: string | null
+  minutes_since_last_snapshot: number | null
+  balance: number | null
+  equity: number | null
+  open_positions: number | null
+  open_lots: number | null
+}
+
+interface HealthResponse {
+  status: HealthStatus
+  server_time: string
+  api: {
+    status: 'online'
+  }
+  database: {
+    status: 'ok' | 'error'
+    error?: string
+  }
+  collector: {
+    status: HealthStatus
+    last_snapshot_time: string | null
+    minutes_since_last_snapshot: number | null
+  }
+  accounts: {
+    total: number
+    healthy: number
+    warning: number
+    critical: number
+    items: HealthAccountItem[]
+  }
+  issues: string[]
+}
+
 type TimelinePreset =
   | 'lifetime'
   | 'lastmonth'
@@ -167,6 +206,48 @@ function toISODate(d: Date): string {
 function formatDMY(iso: string): string {
   const [y, m, d] = iso.split('-')
   return d + '/' + m + '/' + y
+}
+
+function parseDateTime(value?: string | null): Date | null {
+  if (!value) return null
+  const normalized = value.includes('T') ? value : value.replace(' ', 'T')
+  const date = new Date(normalized)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+function formatDateTimeShort(value?: string | null): string {
+  const date = parseDateTime(value)
+  if (!date) return '—'
+  return pad2(date.getDate()) + '/' + pad2(date.getMonth() + 1) + ' ' + pad2(date.getHours()) + ':' + pad2(date.getMinutes())
+}
+
+function formatAge(minutes: number | null | undefined): string {
+  if (minutes === null || minutes === undefined) return 'Chưa có dữ liệu'
+  if (minutes < 1) return 'Vừa xong'
+  if (minutes < 60) return minutes + ' phút trước'
+
+  const hours = Math.floor(minutes / 60)
+  const mins = minutes % 60
+
+  if (hours < 24) {
+    return mins ? hours + ' giờ ' + mins + ' phút trước' : hours + ' giờ trước'
+  }
+
+  const days = Math.floor(hours / 24)
+  const remainHours = hours % 24
+  return remainHours ? days + ' ngày ' + remainHours + ' giờ trước' : days + ' ngày trước'
+}
+
+function getWorstHealthStatus(statuses: HealthStatus[]): HealthStatus {
+  if (statuses.includes('critical')) return 'critical'
+  if (statuses.includes('warning')) return 'warning'
+  return 'healthy'
+}
+
+function getHealthLabel(status: HealthStatus): string {
+  if (status === 'healthy') return 'Healthy'
+  if (status === 'warning') return 'Warning'
+  return 'Critical'
 }
 
 function addDays(d: Date, days: number): Date {
@@ -357,6 +438,202 @@ function TimelineControls({
   )
 }
 
+function HealthFloatingWidget({
+  health, error, loading, expanded, visibleLogins, onToggle, onRefresh,
+}: {
+  health: HealthResponse | null
+  error: string | null
+  loading: boolean
+  expanded: boolean
+  visibleLogins: number[] | 'all'
+  onToggle: () => void
+  onRefresh: () => void
+}) {
+  const styles: Record<HealthStatus, { wrap: string; dot: string; label: string; text: string; badge: string }> = {
+    healthy: {
+      wrap: 'border-emerald-200 bg-emerald-50/95',
+      dot: 'bg-emerald-500',
+      label: 'Healthy',
+      text: 'text-emerald-700',
+      badge: 'bg-emerald-100 text-emerald-700',
+    },
+    warning: {
+      wrap: 'border-amber-200 bg-amber-50/95',
+      dot: 'bg-amber-500',
+      label: 'Warning',
+      text: 'text-amber-700',
+      badge: 'bg-amber-100 text-amber-700',
+    },
+    critical: {
+      wrap: 'border-red-200 bg-red-50/95',
+      dot: 'bg-red-500',
+      label: 'Critical',
+      text: 'text-red-700',
+      badge: 'bg-red-100 text-red-700',
+    },
+  }
+
+  const rawItems = health?.accounts?.items || []
+  const visibleItems = visibleLogins === 'all'
+    ? rawItems
+    : rawItems.filter(item => visibleLogins.includes(item.login))
+
+  const accountStatuses = visibleItems.map(item => item.status)
+  const visibleStatus = error
+    ? 'critical'
+    : health?.database?.status === 'error'
+      ? 'critical'
+      : visibleItems.length > 0
+        ? getWorstHealthStatus(accountStatuses)
+        : health?.status || 'critical'
+
+  const current = styles[visibleStatus]
+  const healthyCount = visibleItems.filter(item => item.status === 'healthy').length
+  const warningCount = visibleItems.filter(item => item.status === 'warning').length
+  const criticalCount = visibleItems.filter(item => item.status === 'critical').length
+  const totalAccounts = visibleItems.length || health?.accounts?.total || 0
+  const latestMinutes = health?.collector?.minutes_since_last_snapshot ?? null
+  const latestTime = health?.collector?.last_snapshot_time ?? null
+
+  return (
+    <div className="fixed bottom-4 left-4 right-4 z-50 sm:left-auto sm:right-4 sm:top-24 sm:bottom-auto sm:w-96">
+      <div className={'rounded-2xl border shadow-xl backdrop-blur-md ' + current.wrap}>
+        <button
+          type="button"
+          onClick={onToggle}
+          className="w-full px-4 py-3 text-left"
+        >
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className={'h-2.5 w-2.5 rounded-full flex-shrink-0 ' + current.dot} />
+              <div className="min-w-0">
+                <p className={'text-sm font-bold ' + current.text}>System {error ? 'Offline' : current.label}</p>
+                <p className="text-xs text-slate-500 truncate">
+                  {error ? 'Không gọi được /api/health' : 'Last sync: ' + formatAge(latestMinutes)}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <span className="rounded-full bg-white/70 px-2 py-1 text-xs font-semibold text-slate-600">
+                {healthyCount}/{totalAccounts}
+              </span>
+              <span className="text-xs text-slate-400">{expanded ? 'Thu gọn' : 'Chi tiết'}</span>
+            </div>
+          </div>
+        </button>
+
+        {expanded && (
+          <div className="border-t border-white/70 px-4 pb-4 pt-3">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <p className="text-sm font-bold text-slate-800">System Health</p>
+              <button
+                type="button"
+                onClick={e => { e.stopPropagation(); onRefresh() }}
+                className="rounded-lg bg-white/80 px-3 py-1 text-xs font-semibold text-slate-600 hover:bg-white"
+              >
+                {loading ? 'Đang refresh...' : 'Refresh'}
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 text-xs mb-3">
+              <div className="rounded-xl bg-white/75 p-3">
+                <p className="text-slate-400 mb-1">API</p>
+                <p className={error ? 'font-semibold text-red-700' : 'font-semibold text-emerald-700'}>
+                  {error ? 'Offline' : 'Online'}
+                </p>
+              </div>
+              <div className="rounded-xl bg-white/75 p-3">
+                <p className="text-slate-400 mb-1">Database</p>
+                <p className={health?.database?.status === 'error' ? 'font-semibold text-red-700' : 'font-semibold text-emerald-700'}>
+                  {health?.database?.status === 'error' ? 'Error' : 'OK'}
+                </p>
+              </div>
+              <div className="rounded-xl bg-white/75 p-3">
+                <p className="text-slate-400 mb-1">Collector</p>
+                <p className={'font-semibold ' + current.text}>{error ? 'Unknown' : getHealthLabel(health?.collector?.status || visibleStatus)}</p>
+              </div>
+              <div className="rounded-xl bg-white/75 p-3">
+                <p className="text-slate-400 mb-1">Last Snapshot</p>
+                <p className="font-semibold text-slate-700">{formatDateTimeShort(latestTime)}</p>
+              </div>
+              <div className="rounded-xl bg-white/75 p-3">
+                <p className="text-slate-400 mb-1">Freshness</p>
+                <p className="font-semibold text-slate-700">{formatAge(latestMinutes)}</p>
+              </div>
+              <div className="rounded-xl bg-white/75 p-3">
+                <p className="text-slate-400 mb-1">Accounts</p>
+                <p className="font-semibold text-slate-700">{healthyCount}/{totalAccounts} synced</p>
+              </div>
+            </div>
+
+            <div className="mb-3 grid grid-cols-3 gap-2 text-xs">
+              <div className="rounded-xl bg-white/75 p-2 text-center">
+                <p className="font-bold text-emerald-700">{healthyCount}</p>
+                <p className="text-slate-400">Healthy</p>
+              </div>
+              <div className="rounded-xl bg-white/75 p-2 text-center">
+                <p className="font-bold text-amber-700">{warningCount}</p>
+                <p className="text-slate-400">Warning</p>
+              </div>
+              <div className="rounded-xl bg-white/75 p-2 text-center">
+                <p className="font-bold text-red-700">{criticalCount}</p>
+                <p className="text-slate-400">Critical</p>
+              </div>
+            </div>
+
+            <div className="max-h-64 space-y-2 overflow-y-auto pr-1">
+              {visibleItems.length === 0 ? (
+                <div className="rounded-xl bg-white/75 px-3 py-3 text-xs text-slate-500">
+                  Chưa có dữ liệu account health.
+                </div>
+              ) : visibleItems.map(account => {
+                const accountStyle = styles[account.status]
+                return (
+                  <div key={account.login} className="rounded-xl bg-white/75 px-3 py-2 text-xs">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="font-semibold text-slate-700 truncate">{account.label}</p>
+                        <p className="text-slate-400">{account.login}</p>
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        <span className={'rounded-full px-2 py-0.5 text-[11px] font-bold ' + accountStyle.badge}>
+                          {accountStyle.label}
+                        </span>
+                        <p className="mt-1 text-slate-400">{formatAge(account.minutes_since_last_snapshot)}</p>
+                      </div>
+                    </div>
+                    <div className="mt-2 grid grid-cols-3 gap-2 text-[11px] text-slate-500">
+                      <p>Balance: {account.balance === null ? '—' : fmt(account.balance)}</p>
+                      <p>Equity: {account.equity === null ? '—' : fmt(account.equity)}</p>
+                      <p>Open: {account.open_positions ?? '—'}</p>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+
+            {(error || (health?.issues || []).length > 0) && (
+              <div className="mt-3 rounded-xl bg-white/75 p-3">
+                <p className="mb-2 text-xs font-bold text-slate-700">Issues</p>
+                <ul className="space-y-1 text-[11px] leading-relaxed text-slate-500">
+                  {error && <li>• {error}</li>}
+                  {(health?.issues || []).slice(0, 5).map((issue, idx) => (
+                    <li key={idx}>• {issue}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <p className="mt-3 text-[11px] leading-relaxed text-slate-500">
+              Auto refresh mỗi 60 giây. Healthy ≤ 75 phút · Warning 75–120 phút · Critical &gt; 120 phút.
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
@@ -369,6 +646,10 @@ export default function DashboardPage() {
   const [accounts, setAccounts] = useState<Account[]>([])
   const [loading, setLoading]   = useState(true)
   const [error, setError]       = useState<string | null>(null)
+  const [health, setHealth] = useState<HealthResponse | null>(null)
+  const [healthError, setHealthError] = useState<string | null>(null)
+  const [healthLoading, setHealthLoading] = useState(false)
+  const [healthExpanded, setHealthExpanded] = useState(false)
 
   // Timeline preset dùng chung cho Tổng quan, bảng tài khoản và biểu đồ.
   // Lifetime = metrics/table lấy all-time; các preset khác = lọc theo startDate/endDate.
@@ -438,6 +719,29 @@ export default function DashboardPage() {
     }
     load()
   }, [email])
+
+  // Health Check — gọi endpoint backend /api/health, auto refresh mỗi 60 giây
+  const fetchHealth = useCallback(async () => {
+    setHealthLoading(true)
+    try {
+      const res = await fetch(API_URL + '/api/health?api_key=' + API_KEY, { cache: 'no-store' })
+      if (!res.ok) throw new Error('Health API error')
+      const data: HealthResponse = await res.json()
+      setHealth(data)
+      setHealthError(null)
+    } catch {
+      setHealthError('Không thể kết nối tới /api/health. Kiểm tra API service hoặc Cloudflare Tunnel.')
+    } finally {
+      setHealthLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (email === undefined || email === null) return
+    fetchHealth()
+    const timer = window.setInterval(fetchHealth, 60000)
+    return () => window.clearInterval(timer)
+  }, [email, fetchHealth])
 
   // Step 3 — fetch + merge daily-equity / daily-pnl cho biểu đồ (theo range đã chọn)
   const fetchChartData = useCallback(async (start: string, end: string) => {
@@ -649,6 +953,8 @@ export default function DashboardPage() {
     return rows.filter(row => chartLabels.some(l => row[l] !== null && row[l] !== undefined))
   })()
 
+  const visibleHealthLogins = email && getAllowedLogins(email)
+
   // ─── Render states ────────────────────────────────────────────────────────
 
   if (loading) {
@@ -692,6 +998,15 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-white text-slate-900">
+      <HealthFloatingWidget
+        health={health}
+        error={healthError}
+        loading={healthLoading}
+        expanded={healthExpanded}
+        visibleLogins={visibleHealthLogins || 'all'}
+        onToggle={() => setHealthExpanded(v => !v)}
+        onRefresh={fetchHealth}
+      />
 
       {/* Header */}
       <header className="border-b border-slate-100 px-6 py-4">
