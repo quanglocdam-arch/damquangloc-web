@@ -496,28 +496,33 @@ function HealthFloatingWidget({
   const latestTime = health?.collector?.last_snapshot_time ?? null
 
   return (
-    <div className="fixed bottom-4 left-4 right-4 z-50 sm:left-auto sm:right-4 sm:top-24 sm:bottom-auto sm:w-96">
-      <div className={'rounded-2xl border shadow-xl backdrop-blur-md ' + current.wrap}>
+    <div
+      className={
+        'fixed right-3 top-20 z-50 max-w-[calc(100vw-1.5rem)] transition-all duration-200 sm:right-4 sm:top-24 ' +
+        (expanded ? 'w-[420px]' : 'w-[248px]')
+      }
+    >
+      <div className={'rounded-xl border shadow-lg backdrop-blur-md ' + current.wrap}>
         <button
           type="button"
           onClick={onToggle}
-          className="w-full px-4 py-3 text-left"
+          className="w-full px-3 py-2 text-left"
         >
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2 min-w-0">
-              <span className={'h-2.5 w-2.5 rounded-full flex-shrink-0 ' + current.dot} />
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex min-w-0 items-center gap-2">
+              <span className={'h-2 w-2 rounded-full flex-shrink-0 ' + current.dot} />
               <div className="min-w-0">
-                <p className={'text-sm font-bold ' + current.text}>System {error ? 'Offline' : current.label}</p>
-                <p className="text-xs text-slate-500 truncate">
-                  {error ? 'Không gọi được /api/health' : 'Last sync: ' + formatAge(latestMinutes)}
+                <p className={'truncate text-xs font-bold ' + current.text}>System {error ? 'Offline' : current.label}</p>
+                <p className="truncate text-[11px] text-slate-500">
+                  {error ? 'Lỗi /api/health' : 'Sync ' + formatAge(latestMinutes)}
                 </p>
               </div>
             </div>
-            <div className="flex items-center gap-2 flex-shrink-0">
-              <span className="rounded-full bg-white/70 px-2 py-1 text-xs font-semibold text-slate-600">
+            <div className="flex flex-shrink-0 items-center gap-1.5">
+              <span className="rounded-full bg-white/70 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
                 {healthyCount}/{totalAccounts}
               </span>
-              <span className="text-xs text-slate-400">{expanded ? 'Thu gọn' : 'Chi tiết'}</span>
+              <span className="text-[11px] font-medium text-slate-400">{expanded ? 'Ẩn' : '›'}</span>
             </div>
           </div>
         </button>
