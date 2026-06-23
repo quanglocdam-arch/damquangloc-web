@@ -398,6 +398,26 @@ export default function FinanceDashboardPage() {
     }
   }
 
+  async function saveAndGenerateMonth(item: WorkspaceItem) {
+    setSaving(`save-generate-${item.period}`);
+    setError("");
+    try {
+      await apiPost("/api/finance/client-month/save-and-generate", {
+        account_login: item.account_login,
+        period: item.period,
+        capital_base: capitalInputs[item.period] || 0,
+        note: noteInputs[item.period] || "",
+      });
+      setMessage(`Đã lưu Capital Base và tính lại settlement tháng ${item.period}.`);
+      await loadWorkspace(item.account_login);
+      await loadMonthlyOverview();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSaving(null);
+    }
+  }
+
   async function updateStatus(
     item: WorkspaceItem,
     action: "LOCKED" | "PAID" | "DRAFT",
@@ -440,7 +460,7 @@ export default function FinanceDashboardPage() {
         <header className="mb-6 flex flex-col gap-4 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm lg:flex-row lg:items-center lg:justify-between">
           <div>
             <div className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-500">
-              Finance Dashboard Ver 5
+              Finance Dashboard Ver 6
             </div>
             <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-950">
               Client Finance Workspace + Monthly Overview
@@ -1014,19 +1034,21 @@ export default function FinanceDashboardPage() {
                               <button
                                 onClick={() => saveMonth(item)}
                                 disabled={saving === `save-${item.period}`}
-                                className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-700 hover:bg-blue-100 disabled:opacity-40"
+                                className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+                                title="Chỉ lưu Capital Base, chưa tính lại settlement"
                               >
-                                Save
+                                Save Only
                               </button>
                               <button
-                                onClick={() => generateMonth(item)}
+                                onClick={() => saveAndGenerateMonth(item)}
                                 disabled={
-                                  !item.has_capital_input ||
-                                  saving === `generate-${item.period}`
+                                  !capitalInputs[item.period] ||
+                                  saving === `save-generate-${item.period}`
                                 }
-                                className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                                className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-700 hover:bg-blue-100 disabled:opacity-40"
+                                title="Lưu số hiện tại trong ô Capital Base và tính lại settlement ngay"
                               >
-                                Generate
+                                Save & Recalculate
                               </button>
                               <button
                                 onClick={() => updateStatus(item, "LOCKED")}
