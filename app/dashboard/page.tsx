@@ -85,6 +85,53 @@ interface DealsResponse {
   deals: DealRow[]
 }
 
+
+interface ExnessSyncRun {
+  started_at?: string
+  finished_at?: string
+  status?: string
+  date_from?: string
+  date_to?: string
+  records_fetched?: number
+  records_inserted?: number
+  records_updated?: number
+  error_message?: string | null
+}
+
+interface ExnessSummary {
+  record_count: number
+  client_account_count: number
+  total_reward_usd: number
+  total_volume_lots: number
+  total_orders: number
+  last_sync: ExnessSyncRun | null
+}
+
+interface ExnessAccountReward {
+  client_account: string
+  account_login: number | null
+  account_label: string
+  mapped: boolean
+  reward_usd: number
+  volume_lots: number
+  orders_count: number
+  record_count: number
+  currency?: string
+  first_reward_date?: string | null
+  last_reward_date?: string | null
+}
+
+interface ExnessByAccountResponse {
+  total: number
+  totals: {
+    reward_usd: number
+    volume_lots: number
+    orders_count: number
+    record_count: number
+  }
+  items: ExnessAccountReward[]
+}
+
 interface AccountMetric {
   netDeposit: number
   netWithdraw: number
@@ -184,6 +231,14 @@ function fmt(value: number, currency = 'USD'): string {
 
 function fmtPnL(value: number): string {
   return (value >= 0 ? '+' : '') + fmt(value)
+}
+
+
+function fmtNum(value: number, decimals = 2): string {
+  return new Intl.NumberFormat('en-US', {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  }).format(value || 0)
 }
 
 
@@ -515,6 +570,117 @@ function TimeBasisInfoBar({ preset, startDate, endDate }: {
   )
 }
 
+
+function ExnessCommissionPanel({
+  accounts, rows, summary, loading, error, timelineLabel,
+}: {
+  accounts: Account[]
+  rows: ExnessAccountReward[]
+  summary: ExnessSummary | null
+  loading: boolean
+  error: string | null
+  timelineLabel: string
+}) {
+  const byLogin = rows.reduce((map, row) => {
+    if (row.account_login !== null && row.account_login !== undefined) {
+      map[String(row.account_login)] = row
+    }
+    return map
+  }, {} as Record<string, ExnessAccountReward>)
+
+  const displayRows = accounts.map(account => {
+    return byLogin[String(account.login)] || {
+      client_account: String(account.login),
+      account_login: account.login,
+      account_label: account.label,
+      mapped: true,
+      reward_usd: 0,
+      volume_lots: 0,
+      orders_count: 0,
+      record_count: 0,
+      currency: 'USD',
+      first_reward_date: null,
+      last_reward_date: null,
+    }
+  })
+
+  const totals = displayRows.reduce(
+    (acc, row) => ({
+      reward_usd: acc.reward_usd + (row.reward_usd || 0),
+      volume_lots: acc.volume_lots + (row.volume_lots || 0),
+      orders_count: acc.orders_count + (row.orders_count || 0),
+    }),
+    { reward_usd: 0, volume_lots: 0, orders_count: 0 }
+  )
+
+  const lastSync = summary?.last_sync?.finished_at || null
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-5 h-full">
+      <div className="flex items-start justify-between gap-3 mb-4">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-400">Exness add-on</p>
+          <h3 className="text-lg font-bold text-slate-900 mt-1">Partner Commission</h3>
+          <p className="text-xs text-slate-500 mt-1">Dùng chung filter: {timelineLabel}</p>
+        </div>
+        <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] font-medium text-slate-500">
+          client_account = MT5 login
+        </span>
+      </div>
+
+      {error ? (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 mb-4">
+          {error}
+        </div>
+      ) : null}
+
+      <div className="grid grid-cols-3 gap-2 mb-4">
+        <div className="rounded-lg border border-white bg-white px-3 py-3">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Commission</p>
+          <p className="mt-1 text-lg font-bold text-emerald-700">{loading ? '...' : fmt(totals.reward_usd)}</p>
+        </div>
+        <div className="rounded-lg border border-white bg-white px-3 py-3">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Lots</p>
+          <p className="mt-1 text-lg font-bold text-slate-800">{loading ? '...' : fmtNum(totals.volume_lots, 2)}</p>
+        </div>
+        <div className="rounded-lg border border-white bg-white px-3 py-3">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Orders</p>
+          <p className="mt-1 text-lg font-bold text-slate-800">{loading ? '...' : fmtNum(totals.orders_count, 0)}</p>
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-slate-200 bg-white overflow-hidden">
+        <div className="grid grid-cols-[1.4fr_0.9fr_0.65fr_0.65fr] gap-2 border-b border-slate-100 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+          <span>Account</span>
+          <span className="text-right">Commission</span>
+          <span className="text-right">Lots</span>
+          <span className="text-right">Orders</span>
+        </div>
+        <div className="max-h-[260px] overflow-y-auto">
+          {displayRows.length === 0 ? (
+            <div className="px-3 py-6 text-center text-xs text-slate-400">Chưa có account để map</div>
+          ) : displayRows.map(row => (
+            <div key={row.client_account} className="grid grid-cols-[1.4fr_0.9fr_0.65fr_0.65fr] gap-2 border-b border-slate-50 px-3 py-2 text-xs last:border-0">
+              <div className="min-w-0">
+                <p className="truncate font-medium text-slate-800">{row.account_label || row.client_account}</p>
+                <p className="text-[10px] text-slate-400">{row.client_account}</p>
+              </div>
+              <div className="text-right font-semibold text-emerald-700">{loading ? '...' : fmt(row.reward_usd || 0)}</div>
+              <div className="text-right text-slate-600">{loading ? '...' : fmtNum(row.volume_lots || 0, 2)}</div>
+              <div className="text-right text-slate-600">{loading ? '...' : fmtNum(row.orders_count || 0, 0)}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400">
+        <span>Last sync: {lastSync ? formatDateTimeShort(lastSync) : 'Chưa sync'}</span>
+        <span>{summary?.record_count ? summary.record_count + ' reward records' : '0 reward records'}</span>
+      </div>
+    </div>
+  )
+}
+
 function HealthFloatingWidget({
   health, error, loading, expanded, visibleLogins, onToggle, onRefresh,
 }: {
@@ -753,6 +919,13 @@ export default function DashboardPage() {
   const [rawDeals, setRawDeals]     = useState<Record<string, DealRow[]>>({})
   const [tableLoading, setTableLoading] = useState(false)
 
+
+  // Exness Partner Commission add-on — tách riêng, không thay đổi logic trading hiện tại
+  const [exnessSummary, setExnessSummary] = useState<ExnessSummary | null>(null)
+  const [exnessRows, setExnessRows] = useState<ExnessAccountReward[]>([])
+  const [exnessLoading, setExnessLoading] = useState(false)
+  const [exnessError, setExnessError] = useState<string | null>(null)
+
   function handlePresetChange(preset: TimelinePreset) {
     setTimelinePreset(preset)
 
@@ -924,6 +1097,40 @@ export default function DashboardPage() {
   useEffect(() => {
     if (accounts.length) fetchRawDeals(accounts, startDate, endDate, viewMode)
   }, [accounts, startDate, endDate, viewMode, fetchRawDeals])
+
+
+  const fetchExnessRewards = useCallback(async (start: string, end: string, mode: 'lifetime' | 'range') => {
+    setExnessLoading(true)
+    try {
+      const query = mode === 'lifetime'
+        ? '&days=3650'
+        : '&date_from=' + start + '&date_to=' + end
+
+      const [summaryRes, byAccountRes] = await Promise.all([
+        fetch(API_URL + '/api/exness/rewards/summary?api_key=' + API_KEY + query, { cache: 'no-store' }),
+        fetch(API_URL + '/api/exness/rewards/by-account?api_key=' + API_KEY + query, { cache: 'no-store' }),
+      ])
+
+      if (!summaryRes.ok || !byAccountRes.ok) throw new Error('Exness API error')
+
+      const summaryJson: ExnessSummary = await summaryRes.json()
+      const byAccountJson: ExnessByAccountResponse = await byAccountRes.json()
+
+      setExnessSummary(summaryJson)
+      setExnessRows(byAccountJson.items || [])
+      setExnessError(null)
+    } catch {
+      setExnessError('Chưa tải được Exness commission. Kiểm tra backend hoặc sync collector.')
+      setExnessSummary(null)
+      setExnessRows([])
+    } finally {
+      setExnessLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (accounts.length) fetchExnessRewards(startDate, endDate, viewMode)
+  }, [accounts, startDate, endDate, viewMode, fetchExnessRewards])
 
   // ─── Derived ─────────────────────────────────────────────────────────────
 
@@ -1135,33 +1342,44 @@ export default function DashboardPage() {
             endDate={endDate}
           />
 
-          {/* Stat cards — lấy theo Lifetime hoặc khoảng ngày đang chọn */}
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">
-            <StatCard
-              label="Net Deposit"
-              value={tableLoading ? '...' : fmt(metricTotals.netDeposit)}
-              sub={timelineLabel}
-            />
-            <StatCard
-              label="Net Withdraw"
-              value={tableLoading ? '...' : fmt(metricTotals.netWithdraw)}
-              sub={timelineLabel}
-            />
-            <StatCard
-              label="PNL"
-              value={tableLoading ? '...' : fmtPnL(metricTotals.pnl)}
-              color={metricTotals.pnl >= 0 ? 'green' : 'red'}
-            />
-            <StatCard
-              label="Commission"
-              value={tableLoading ? '...' : fmt(metricTotals.commission)}
-              color="neutral"
-            />
-            <StatCard
-              label="Final Profit"
-              value={tableLoading ? '...' : fmtPnL(metricTotals.finalProfit)}
-              sub="PNL + Commission"
-              color={metricTotals.finalProfit >= 0 ? 'green' : 'red'}
+          {/* Stat cards — giữ nguyên metric trading, thêm Exness add-on kế bên */}
+          <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,2fr)_minmax(360px,1fr)] gap-4 mb-6">
+            <div className="grid grid-cols-1 md:grid-cols-3 2xl:grid-cols-5 gap-4">
+              <StatCard
+                label="Net Deposit"
+                value={tableLoading ? '...' : fmt(metricTotals.netDeposit)}
+                sub={timelineLabel}
+              />
+              <StatCard
+                label="Net Withdraw"
+                value={tableLoading ? '...' : fmt(metricTotals.netWithdraw)}
+                sub={timelineLabel}
+              />
+              <StatCard
+                label="PNL"
+                value={tableLoading ? '...' : fmtPnL(metricTotals.pnl)}
+                color={metricTotals.pnl >= 0 ? 'green' : 'red'}
+              />
+              <StatCard
+                label="Commission"
+                value={tableLoading ? '...' : fmt(metricTotals.commission)}
+                color="neutral"
+              />
+              <StatCard
+                label="Final Profit"
+                value={tableLoading ? '...' : fmtPnL(metricTotals.finalProfit)}
+                sub="PNL + Commission"
+                color={metricTotals.finalProfit >= 0 ? 'green' : 'red'}
+              />
+            </div>
+
+            <ExnessCommissionPanel
+              accounts={accounts}
+              rows={exnessRows}
+              summary={exnessSummary}
+              loading={exnessLoading}
+              error={exnessError}
+              timelineLabel={timelineLabel}
             />
           </div>
 
