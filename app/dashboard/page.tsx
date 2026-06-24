@@ -572,14 +572,12 @@ function TimeBasisInfoBar({ preset, startDate, endDate }: {
 
 
 function ExnessCommissionPanel({
-  accounts, rows, summary, loading, error, timelineLabel,
+  accounts, rows, loading, error,
 }: {
   accounts: Account[]
   rows: ExnessAccountReward[]
-  summary: ExnessSummary | null
   loading: boolean
   error: string | null
-  timelineLabel: string
 }) {
   const byLogin = rows.reduce((map, row) => {
     if (row.account_login !== null && row.account_login !== undefined) {
@@ -588,6 +586,9 @@ function ExnessCommissionPanel({
     return map
   }, {} as Record<string, ExnessAccountReward>)
 
+  // Luôn render theo đúng thứ tự accounts của Trading Dashboard.
+  // Bảng này cố ý không có cột tài khoản, để từng dòng Commission/Lots
+  // nằm ngang hàng với từng dòng tài khoản ở bảng bên trái.
   const displayRows = accounts.map(account => {
     return byLogin[String(account.login)] || {
       client_account: String(account.login),
@@ -614,19 +615,11 @@ function ExnessCommissionPanel({
     { reward_usd: 0, volume_lots: 0, orders_count: 0, record_count: 0 }
   )
 
-  const lastSync = summary?.last_sync?.finished_at || null
-
   return (
     <div className="bg-white rounded-xl border border-slate-200 overflow-hidden h-full">
-      <div className="px-5 py-4 border-b border-slate-100 flex items-start justify-between gap-3">
-        <div>
-          <h3 className="font-semibold text-slate-900">Exness Commission</h3>
-          <p className="mt-1 text-xs text-slate-400">Dùng chung filter: {timelineLabel}</p>
-        </div>
-        <div className="text-right">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Total</p>
-          <p className="text-sm font-bold text-emerald-700">{loading ? '...' : fmt(totals.reward_usd)}</p>
-        </div>
+      <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+        <h3 className="font-semibold text-slate-900">Exness Commission</h3>
+        <span className="text-xs text-slate-400">Reward USD / Lots</span>
       </div>
 
       {error ? (
@@ -636,59 +629,38 @@ function ExnessCommissionPanel({
       ) : null}
 
       <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-full text-sm table-fixed">
           <thead>
             <tr className="text-xs text-slate-400 uppercase border-b border-slate-100">
-              <th className="px-5 py-3 text-left">Tài khoản</th>
-              <th className="px-5 py-3 text-right">Commission</th>
-              <th className="px-5 py-3 text-right">Lots</th>
-              <th className="px-5 py-3 text-right">Orders</th>
+              <th className="px-6 py-3 text-right">Commission</th>
+              <th className="px-6 py-3 text-right">Lots</th>
             </tr>
           </thead>
           <tbody>
             {displayRows.length === 0 ? (
               <tr>
-                <td colSpan={4} className="px-5 py-12 text-center text-slate-400">
+                <td colSpan={2} className="px-6 py-12 text-center text-slate-400">
                   Chưa có account để map
                 </td>
               </tr>
             ) : displayRows.map(row => (
-              <tr key={row.client_account} className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
-                <td className="px-5 py-4">
-                  <div className="flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full flex-shrink-0 bg-emerald-500" />
-                    <div className="min-w-0">
-                      <p className="truncate font-medium text-slate-900">{row.account_label || row.client_account}</p>
-                      <p className="text-xs text-slate-400">{row.client_account}</p>
-                    </div>
-                  </div>
-                </td>
-                <td className="px-5 py-4 text-right font-semibold text-emerald-700">
+              <tr key={row.client_account} className="h-[73px] border-b border-slate-50 hover:bg-slate-50 transition-colors">
+                <td className="px-6 py-4 text-right font-semibold text-emerald-700 align-middle">
                   {loading ? '...' : fmt(row.reward_usd || 0)}
                 </td>
-                <td className="px-5 py-4 text-right text-slate-700">
+                <td className="px-6 py-4 text-right text-slate-700 align-middle">
                   {loading ? '...' : fmtNum(row.volume_lots || 0, 2)}
-                </td>
-                <td className="px-5 py-4 text-right text-slate-700">
-                  {loading ? '...' : fmtNum(row.orders_count || 0, 0)}
                 </td>
               </tr>
             ))}
           </tbody>
           <tfoot>
-            <tr className="bg-slate-50 font-semibold text-slate-900 border-t border-slate-200">
-              <td className="px-5 py-3">Tổng</td>
-              <td className="px-5 py-3 text-right text-emerald-700">{loading ? '...' : fmt(totals.reward_usd)}</td>
-              <td className="px-5 py-3 text-right">{loading ? '...' : fmtNum(totals.volume_lots, 2)}</td>
-              <td className="px-5 py-3 text-right">{loading ? '...' : fmtNum(totals.orders_count, 0)}</td>
+            <tr className="h-[45px] bg-slate-50 font-semibold text-slate-900 border-t border-slate-200">
+              <td className="px-6 py-3 text-right text-emerald-700">{loading ? '...' : fmt(totals.reward_usd)}</td>
+              <td className="px-6 py-3 text-right">{loading ? '...' : fmtNum(totals.volume_lots, 2)}</td>
             </tr>
           </tfoot>
         </table>
-      </div>
-
-      <div className="px-5 py-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400">
-        <span>Last sync: {lastSync ? formatDateTimeShort(lastSync) : 'Chưa sync'}</span>
-        <span>{summary?.record_count ? summary.record_count + ' reward records' : '0 reward records'}</span>
       </div>
     </div>
   )
@@ -934,7 +906,6 @@ export default function DashboardPage() {
 
 
   // Exness Partner Commission add-on — tách riêng, không thay đổi logic trading hiện tại
-  const [exnessSummary, setExnessSummary] = useState<ExnessSummary | null>(null)
   const [exnessRows, setExnessRows] = useState<ExnessAccountReward[]>([])
   const [exnessLoading, setExnessLoading] = useState(false)
   const [exnessError, setExnessError] = useState<string | null>(null)
@@ -1119,22 +1090,16 @@ export default function DashboardPage() {
         ? '&days=3650'
         : '&date_from=' + start + '&date_to=' + end
 
-      const [summaryRes, byAccountRes] = await Promise.all([
-        fetch(API_URL + '/api/exness/rewards/summary?api_key=' + API_KEY + query, { cache: 'no-store' }),
-        fetch(API_URL + '/api/exness/rewards/by-account?api_key=' + API_KEY + query, { cache: 'no-store' }),
-      ])
+      const byAccountRes = await fetch(API_URL + '/api/exness/rewards/by-account?api_key=' + API_KEY + query, { cache: 'no-store' })
 
-      if (!summaryRes.ok || !byAccountRes.ok) throw new Error('Exness API error')
+      if (!byAccountRes.ok) throw new Error('Exness API error')
 
-      const summaryJson: ExnessSummary = await summaryRes.json()
       const byAccountJson: ExnessByAccountResponse = await byAccountRes.json()
 
-      setExnessSummary(summaryJson)
       setExnessRows(byAccountJson.items || [])
       setExnessError(null)
     } catch {
       setExnessError('Chưa tải được Exness commission. Kiểm tra backend hoặc sync collector.')
-      setExnessSummary(null)
       setExnessRows([])
     } finally {
       setExnessLoading(false)
@@ -1500,10 +1465,8 @@ export default function DashboardPage() {
             <ExnessCommissionPanel
               accounts={accounts}
               rows={exnessRows}
-              summary={exnessSummary}
               loading={exnessLoading}
               error={exnessError}
-              timelineLabel={timelineLabel}
             />
           </div>
 
