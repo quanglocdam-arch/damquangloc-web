@@ -108,6 +108,26 @@ type MonthlyOverviewResponse = {
   items: WorkspaceItem[];
 };
 
+
+function accountNaturalSortKey(label: string): [number, number, string] {
+  const text = String(label || "");
+  const lower = text.toLowerCase();
+  if (lower.startsWith("master")) return [0, 0, lower];
+  const match = lower.match(/copy\s*(\d+)/i);
+  if (match) return [1, Number(match[1]), lower];
+  return [2, 999999, lower];
+}
+
+function sortClientAccounts<T extends { account_label: string }>(items: T[]): T[] {
+  return [...items].sort((a, b) => {
+    const ak = accountNaturalSortKey(a.account_label);
+    const bk = accountNaturalSortKey(b.account_label);
+    if (ak[0] !== bk[0]) return ak[0] - bk[0];
+    if (ak[1] !== bk[1]) return ak[1] - bk[1];
+    return ak[2].localeCompare(bk[2]);
+  });
+}
+
 function currentPeriod(): string {
   const now = new Date();
   const month = `${now.getMonth() + 1}`.padStart(2, "0");
@@ -268,8 +288,9 @@ export default function FinanceDashboardPage() {
     const data = await apiGet<{ total: number; items: ClientAccount[] }>(
       "/api/finance/client-workspace/accounts",
     );
-    setAccounts(data.items);
-    setSelectedLogin((prev) => prev ?? data.items[0]?.account_login ?? null);
+    const sortedItems = sortClientAccounts(data.items);
+    setAccounts(sortedItems);
+    setSelectedLogin((prev) => prev ?? sortedItems[0]?.account_login ?? null);
   }, []);
 
   const loadWorkspace = useCallback(
@@ -311,7 +332,7 @@ export default function FinanceDashboardPage() {
     const data = await apiGet<MonthlyOverviewResponse>(
       `/api/finance/client-workspace/monthly-overview?period=${overviewPeriod}`,
     );
-    setMonthlyOverview(data);
+    setMonthlyOverview({ ...data, items: sortClientAccounts(data.items || []) });
   }, [overviewPeriod]);
 
   useEffect(() => {
