@@ -9,6 +9,7 @@ import {
 
 const API_URL = 'https://api.damquangloc.com'
 const API_KEY = 'mt5dashboard2026'
+const TRADING_DAY_START_HOUR = 7
 
 const COLORS: Record<string, string> = {
   Copy1_Quynh:   '#3b82f6',
@@ -264,8 +265,38 @@ function startOfWeekMonday(d: Date): Date {
   return copy
 }
 
-function getPresetDateRange(preset: TimelinePreset, today: Date): { start: string; end: string } {
+function getCurrentTradingDate(today: Date): Date {
   const current = new Date(today.getFullYear(), today.getMonth(), today.getDate())
+  if (today.getHours() < TRADING_DAY_START_HOUR) {
+    current.setDate(current.getDate() - 1)
+  }
+  return current
+}
+
+function getTradingRange(start: string, end: string): { tradingFrom: Date; tradingTo: Date; calendarFrom: Date; calendarTo: Date } {
+  const [sy, sm, sd] = start.split('-').map(Number)
+  const [ey, em, ed] = end.split('-').map(Number)
+  const tradingFrom = new Date(sy, sm - 1, sd, TRADING_DAY_START_HOUR, 0, 0, 0)
+  const tradingTo = new Date(ey, em - 1, ed + 1, TRADING_DAY_START_HOUR, 0, 0, 0)
+  tradingTo.setMilliseconds(tradingTo.getMilliseconds() - 1)
+  const calendarFrom = new Date(sy, sm - 1, sd, 0, 0, 0, 0)
+  const calendarTo = new Date(ey, em - 1, ed, 23, 59, 59, 999)
+  return { tradingFrom, tradingTo, calendarFrom, calendarTo }
+}
+
+function formatRangeDateTime(d: Date): string {
+  return pad2(d.getDate()) + '/' + pad2(d.getMonth() + 1) + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes())
+}
+
+function parseLocalDateTime(value?: string | null): Date | null {
+  if (!value) return null
+  const normalized = value.includes('T') ? value : value.replace(' ', 'T')
+  const d = new Date(normalized)
+  return Number.isNaN(d.getTime()) ? null : d
+}
+
+function getPresetDateRange(preset: TimelinePreset, today: Date): { start: string; end: string } {
+  const current = getCurrentTradingDate(today)
 
   if (preset === 'today') {
     return { start: toISODate(current), end: toISODate(current) }
@@ -300,7 +331,6 @@ function getPresetDateRange(preset: TimelinePreset, today: Date): { start: strin
     return { start: toISODate(start), end: toISODate(end) }
   }
 
-  // Lifetime không filter theo ngày cho metrics/table. Date range chỉ giữ để chart không fetch quá dài.
   const start = new Date(current.getFullYear(), current.getMonth(), 1)
   return { start: toISODate(start), end: toISODate(current) }
 }
@@ -309,7 +339,7 @@ function getTimelineLabel(preset: TimelinePreset, start: string, end: string): s
   if (preset === 'lifetime') return 'Lifetime'
   const found = TIMELINE_OPTIONS.find(o => o.value === preset)
   const label = found?.label || 'Custom'
-  return label + ': ' + formatDMY(start) + ' → ' + formatDMY(end)
+  return label + ' · Trading date ' + formatDMY(start) + ' → ' + formatDMY(end)
 }
 
 // Liệt kê các (year, month) phủ khoảng [start, end] để gọi API daily-* theo từng tháng
@@ -326,11 +356,13 @@ function getMonthsInRange(start: string, end: string): { year: number; month: nu
   return months
 }
 
-// Có nằm trong khoảng đã chọn không — 'lifetime' = luôn true (lấy hết, all-time)
+// Có nằm trong khoảng đã chọn không — range dùng MT5 trading day 07:00 → 06:59 GMT+7.
 function inRange(timeStr: string, mode: 'lifetime' | 'range', start: string, end: string): boolean {
   if (mode === 'lifetime') return true
-  const d = timeStr.slice(0, 10)
-  return d >= start && d <= end
+  const t = parseLocalDateTime(timeStr)
+  if (!t) return false
+  const { tradingFrom, tradingTo } = getTradingRange(start, end)
+  return t >= tradingFrom && t <= tradingTo
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -434,6 +466,51 @@ function TimelineControls({
           disabled={!isCustom}
         />
       )}
+    </div>
+  )
+}
+
+
+function TimeBasisInfoBar({ preset, startDate, endDate }: {
+  preset: TimelinePreset
+  startDate: string
+  endDate: string
+}) {
+  if (preset === 'lifetime') {
+    return (
+      <div className="mb-6 rounded-2xl border border-slate-200 bg-slate-50/80 px-5 py-4 text-sm text-slate-600 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-400">Time basis</p>
+            <p className="mt-1 font-semibold text-slate-800">Lifetime · all available trading history</p>
+          </div>
+          <p className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-500">
+            MT5 trading day resets at 07:00 GMT+7
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  const { tradingFrom, tradingTo, calendarFrom, calendarTo } = getTradingRange(startDate, endDate)
+  const selected = TIMELINE_OPTIONS.find(o => o.value === preset)?.label || 'Custom'
+
+  return (
+    <div className="mb-6 rounded-2xl border border-slate-200 bg-slate-50/80 px-5 py-4 text-sm text-slate-600 shadow-sm">
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-400">MT5 trading time</p>
+          <p className="mt-1 font-semibold text-slate-800">
+            {selected} · {formatRangeDateTime(tradingFrom)} → {formatRangeDateTime(tradingTo)} GMT+7
+          </p>
+          <p className="mt-1 text-xs text-slate-500">
+            Calendar comparison · {formatRangeDateTime(calendarFrom)} → {formatRangeDateTime(calendarTo)} GMT+7
+          </p>
+        </div>
+        <div className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs text-slate-500">
+          <span className="font-semibold text-slate-700">Daily reset:</span> 07:00 GMT+7
+        </div>
+      </div>
     </div>
   )
 }
@@ -643,8 +720,9 @@ function HealthFloatingWidget({
 
 export default function DashboardPage() {
   const now = new Date()
-  const todayISO = toISODate(now)
-  const firstOfMonthISO = toISODate(new Date(now.getFullYear(), now.getMonth(), 1))
+  const tradingToday = getCurrentTradingDate(now)
+  const todayISO = toISODate(tradingToday)
+  const firstOfMonthISO = toISODate(new Date(tradingToday.getFullYear(), tradingToday.getMonth(), 1))
 
   const [email, setEmail]       = useState<string | null | undefined>(undefined)
   const [overview, setOverview] = useState<Overview | null>(null)
@@ -816,21 +894,20 @@ export default function DashboardPage() {
   }, [accounts])
 
   // Step 5 — fetch raw deals (profit/commission/swap tách riêng) cho từng account đã phân quyền
-  const fetchRawDeals = useCallback(async (accs: Account[], start: string, mode: 'lifetime' | 'range') => {
+  const fetchRawDeals = useCallback(async (accs: Account[], start: string, end: string, mode: 'lifetime' | 'range') => {
     if (!accs.length) return
     setTableLoading(true)
     try {
-      const daysBack =
-        mode === 'lifetime'
-          ? 3650
-          : Math.max(2, Math.ceil((new Date(todayISO).getTime() - new Date(start).getTime()) / 86400000) + 2)
-
       const results = await Promise.all(
-        accs.map(a =>
-          fetch(API_URL + '/api/deals?api_key=' + API_KEY + '&account=' + a.login + '&days=' + daysBack)
+        accs.map(a => {
+          const url =
+            mode === 'lifetime'
+              ? API_URL + '/api/deals?api_key=' + API_KEY + '&account=' + a.login + '&days=3650&limit=10000'
+              : API_URL + '/api/deals?api_key=' + API_KEY + '&account=' + a.login + '&date_from=' + start + '&date_to=' + end + '&limit=10000'
+          return fetch(url)
             .then(r => r.json())
             .then((json: DealsResponse) => ({ label: a.label, deals: json.deals || [] }))
-        )
+        })
       )
       const map: Record<string, DealRow[]> = {}
       for (const { label, deals } of results) {
@@ -842,11 +919,11 @@ export default function DashboardPage() {
     } finally {
       setTableLoading(false)
     }
-  }, [todayISO])
+  }, [])
 
   useEffect(() => {
-    if (accounts.length) fetchRawDeals(accounts, startDate, viewMode)
-  }, [accounts, startDate, viewMode, fetchRawDeals])
+    if (accounts.length) fetchRawDeals(accounts, startDate, endDate, viewMode)
+  }, [accounts, startDate, endDate, viewMode, fetchRawDeals])
 
   // ─── Derived ─────────────────────────────────────────────────────────────
 
@@ -1051,6 +1128,12 @@ export default function DashboardPage() {
               onEndChange={handleEndChange}
             />
           </div>
+
+          <TimeBasisInfoBar
+            preset={timelinePreset}
+            startDate={startDate}
+            endDate={endDate}
+          />
 
           {/* Stat cards — lấy theo Lifetime hoặc khoảng ngày đang chọn */}
           <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">
