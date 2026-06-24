@@ -609,71 +609,84 @@ function ExnessCommissionPanel({
       reward_usd: acc.reward_usd + (row.reward_usd || 0),
       volume_lots: acc.volume_lots + (row.volume_lots || 0),
       orders_count: acc.orders_count + (row.orders_count || 0),
+      record_count: acc.record_count + (row.record_count || 0),
     }),
-    { reward_usd: 0, volume_lots: 0, orders_count: 0 }
+    { reward_usd: 0, volume_lots: 0, orders_count: 0, record_count: 0 }
   )
 
   const lastSync = summary?.last_sync?.finished_at || null
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-5 h-full">
-      <div className="flex items-start justify-between gap-3 mb-4">
+    <div className="bg-white rounded-xl border border-slate-200 overflow-hidden h-full">
+      <div className="px-5 py-4 border-b border-slate-100 flex items-start justify-between gap-3">
         <div>
-          <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-400">Exness add-on</p>
-          <h3 className="text-lg font-bold text-slate-900 mt-1">Partner Commission</h3>
-          <p className="text-xs text-slate-500 mt-1">Dùng chung filter: {timelineLabel}</p>
+          <h3 className="font-semibold text-slate-900">Exness Commission</h3>
+          <p className="mt-1 text-xs text-slate-400">Dùng chung filter: {timelineLabel}</p>
         </div>
-        <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] font-medium text-slate-500">
-          client_account = MT5 login
-        </span>
+        <div className="text-right">
+          <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Total</p>
+          <p className="text-sm font-bold text-emerald-700">{loading ? '...' : fmt(totals.reward_usd)}</p>
+        </div>
       </div>
 
       {error ? (
-        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 mb-4">
+        <div className="mx-5 mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
           {error}
         </div>
       ) : null}
 
-      <div className="grid grid-cols-3 gap-2 mb-4">
-        <div className="rounded-lg border border-white bg-white px-3 py-3">
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Commission</p>
-          <p className="mt-1 text-lg font-bold text-emerald-700">{loading ? '...' : fmt(totals.reward_usd)}</p>
-        </div>
-        <div className="rounded-lg border border-white bg-white px-3 py-3">
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Lots</p>
-          <p className="mt-1 text-lg font-bold text-slate-800">{loading ? '...' : fmtNum(totals.volume_lots, 2)}</p>
-        </div>
-        <div className="rounded-lg border border-white bg-white px-3 py-3">
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Orders</p>
-          <p className="mt-1 text-lg font-bold text-slate-800">{loading ? '...' : fmtNum(totals.orders_count, 0)}</p>
-        </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-xs text-slate-400 uppercase border-b border-slate-100">
+              <th className="px-5 py-3 text-left">Tài khoản</th>
+              <th className="px-5 py-3 text-right">Commission</th>
+              <th className="px-5 py-3 text-right">Lots</th>
+              <th className="px-5 py-3 text-right">Orders</th>
+            </tr>
+          </thead>
+          <tbody>
+            {displayRows.length === 0 ? (
+              <tr>
+                <td colSpan={4} className="px-5 py-12 text-center text-slate-400">
+                  Chưa có account để map
+                </td>
+              </tr>
+            ) : displayRows.map(row => (
+              <tr key={row.client_account} className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
+                <td className="px-5 py-4">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full flex-shrink-0 bg-emerald-500" />
+                    <div className="min-w-0">
+                      <p className="truncate font-medium text-slate-900">{row.account_label || row.client_account}</p>
+                      <p className="text-xs text-slate-400">{row.client_account}</p>
+                    </div>
+                  </div>
+                </td>
+                <td className="px-5 py-4 text-right font-semibold text-emerald-700">
+                  {loading ? '...' : fmt(row.reward_usd || 0)}
+                </td>
+                <td className="px-5 py-4 text-right text-slate-700">
+                  {loading ? '...' : fmtNum(row.volume_lots || 0, 2)}
+                </td>
+                <td className="px-5 py-4 text-right text-slate-700">
+                  {loading ? '...' : fmtNum(row.orders_count || 0, 0)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr className="bg-slate-50 font-semibold text-slate-900 border-t border-slate-200">
+              <td className="px-5 py-3">Tổng</td>
+              <td className="px-5 py-3 text-right text-emerald-700">{loading ? '...' : fmt(totals.reward_usd)}</td>
+              <td className="px-5 py-3 text-right">{loading ? '...' : fmtNum(totals.volume_lots, 2)}</td>
+              <td className="px-5 py-3 text-right">{loading ? '...' : fmtNum(totals.orders_count, 0)}</td>
+            </tr>
+          </tfoot>
+        </table>
       </div>
 
-      <div className="rounded-lg border border-slate-200 bg-white overflow-hidden">
-        <div className="grid grid-cols-[1.4fr_0.9fr_0.65fr_0.65fr] gap-2 border-b border-slate-100 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">
-          <span>Account</span>
-          <span className="text-right">Commission</span>
-          <span className="text-right">Lots</span>
-          <span className="text-right">Orders</span>
-        </div>
-        <div className="max-h-[260px] overflow-y-auto">
-          {displayRows.length === 0 ? (
-            <div className="px-3 py-6 text-center text-xs text-slate-400">Chưa có account để map</div>
-          ) : displayRows.map(row => (
-            <div key={row.client_account} className="grid grid-cols-[1.4fr_0.9fr_0.65fr_0.65fr] gap-2 border-b border-slate-50 px-3 py-2 text-xs last:border-0">
-              <div className="min-w-0">
-                <p className="truncate font-medium text-slate-800">{row.account_label || row.client_account}</p>
-                <p className="text-[10px] text-slate-400">{row.client_account}</p>
-              </div>
-              <div className="text-right font-semibold text-emerald-700">{loading ? '...' : fmt(row.reward_usd || 0)}</div>
-              <div className="text-right text-slate-600">{loading ? '...' : fmtNum(row.volume_lots || 0, 2)}</div>
-              <div className="text-right text-slate-600">{loading ? '...' : fmtNum(row.orders_count || 0, 0)}</div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400">
+      <div className="px-5 py-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400">
         <span>Last sync: {lastSync ? formatDateTimeShort(lastSync) : 'Chưa sync'}</span>
         <span>{summary?.record_count ? summary.record_count + ' reward records' : '0 reward records'}</span>
       </div>
@@ -1342,49 +1355,39 @@ export default function DashboardPage() {
             endDate={endDate}
           />
 
-          {/* Stat cards — giữ nguyên metric trading, thêm Exness add-on kế bên */}
-          <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,2fr)_minmax(360px,1fr)] gap-4 mb-6">
-            <div className="grid grid-cols-1 md:grid-cols-3 2xl:grid-cols-5 gap-4">
-              <StatCard
-                label="Net Deposit"
-                value={tableLoading ? '...' : fmt(metricTotals.netDeposit)}
-                sub={timelineLabel}
-              />
-              <StatCard
-                label="Net Withdraw"
-                value={tableLoading ? '...' : fmt(metricTotals.netWithdraw)}
-                sub={timelineLabel}
-              />
-              <StatCard
-                label="PNL"
-                value={tableLoading ? '...' : fmtPnL(metricTotals.pnl)}
-                color={metricTotals.pnl >= 0 ? 'green' : 'red'}
-              />
-              <StatCard
-                label="Commission"
-                value={tableLoading ? '...' : fmt(metricTotals.commission)}
-                color="neutral"
-              />
-              <StatCard
-                label="Final Profit"
-                value={tableLoading ? '...' : fmtPnL(metricTotals.finalProfit)}
-                sub="PNL + Commission"
-                color={metricTotals.finalProfit >= 0 ? 'green' : 'red'}
-              />
-            </div>
-
-            <ExnessCommissionPanel
-              accounts={accounts}
-              rows={exnessRows}
-              summary={exnessSummary}
-              loading={exnessLoading}
-              error={exnessError}
-              timelineLabel={timelineLabel}
+          {/* Stat cards — giữ nguyên metric trading hiện tại */}
+          <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-5 gap-4 mb-6">
+            <StatCard
+              label="Net Deposit"
+              value={tableLoading ? '...' : fmt(metricTotals.netDeposit)}
+              sub={timelineLabel}
+            />
+            <StatCard
+              label="Net Withdraw"
+              value={tableLoading ? '...' : fmt(metricTotals.netWithdraw)}
+              sub={timelineLabel}
+            />
+            <StatCard
+              label="PNL"
+              value={tableLoading ? '...' : fmtPnL(metricTotals.pnl)}
+              color={metricTotals.pnl >= 0 ? 'green' : 'red'}
+            />
+            <StatCard
+              label="Commission"
+              value={tableLoading ? '...' : fmt(metricTotals.commission)}
+              color="neutral"
+            />
+            <StatCard
+              label="Final Profit"
+              value={tableLoading ? '...' : fmtPnL(metricTotals.finalProfit)}
+              sub="PNL + Commission"
+              color={metricTotals.finalProfit >= 0 ? 'green' : 'red'}
             />
           </div>
 
-          {/* Account table — format cố định: Net Deposit / Net Withdraw / Actual Balance / PNL / Commission / Final Profit */}
-          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+          <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.9fr)] gap-4 items-start">
+            {/* Account table — format cố định: Net Deposit / Net Withdraw / Actual Balance / PNL / Commission / Final Profit */}
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
             <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
               <h3 className="font-semibold text-slate-900">Tài khoản ({accounts.length})</h3>
               <span className="text-xs text-slate-400">
@@ -1492,7 +1495,18 @@ export default function DashboardPage() {
                 </table>
               </div>
             )}
+            </div>
+
+            <ExnessCommissionPanel
+              accounts={accounts}
+              rows={exnessRows}
+              summary={exnessSummary}
+              loading={exnessLoading}
+              error={exnessError}
+              timelineLabel={timelineLabel}
+            />
           </div>
+
         </section>
 
         {/* ── PHÂN TÍCH THEO TIMELINE ── */}
