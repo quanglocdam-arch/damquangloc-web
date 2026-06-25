@@ -17,6 +17,13 @@ const activeApps: AppCard[] = [
     status: "active",
   },
   {
+    title: "Commission Dashboard",
+    description: "Theo dõi Exness Partner commission, volume lots, orders và reward detail theo timeline filter.",
+    href: "/dashboard/commission",
+    tag: "Exness Partner",
+    status: "active",
+  },
+  {
     title: "Finance Dashboard",
     description: "Quản lý capital base từng khách, settlement theo tháng, client profit và manager profit.",
     href: "/dashboard/finance",
@@ -140,7 +147,7 @@ export default function HomePage() {
             </div>
           </div>
 
-          <div className="grid gap-5 md:grid-cols-2">
+          <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
             {activeApps.map((app) => (
               <AppCardView key={app.title} app={app} />
             ))}
@@ -165,7 +172,7 @@ export default function HomePage() {
         <footer className="rounded-3xl border border-slate-200 bg-white p-6 text-sm text-slate-500 shadow-sm">
           <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
             <p>© {new Date().getFullYear()} Đàm Quang Lộc. Personal operation hub.</p>
-            <p className="font-medium text-slate-700">Trading · Finance · Reports · Personal Workspace</p>
+            <p className="font-medium text-slate-700">Trading · Commission · Finance · Reports · Personal Workspace</p>
           </div>
         </footer>
       </section>

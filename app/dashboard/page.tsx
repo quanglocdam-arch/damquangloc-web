@@ -78,58 +78,16 @@ interface DealRow {
   profit: number
   commission: number
   swap: number
+  net_profit?: number
+  symbol?: string
+  direction?: string
+  volume?: number
+  deal_ticket?: number
 }
 
 interface DealsResponse {
   total: number
   deals: DealRow[]
-}
-
-
-interface ExnessSyncRun {
-  started_at?: string
-  finished_at?: string
-  status?: string
-  date_from?: string
-  date_to?: string
-  records_fetched?: number
-  records_inserted?: number
-  records_updated?: number
-  error_message?: string | null
-}
-
-interface ExnessSummary {
-  record_count: number
-  client_account_count: number
-  total_reward_usd: number
-  total_volume_lots: number
-  total_orders: number
-  last_sync: ExnessSyncRun | null
-}
-
-interface ExnessAccountReward {
-  client_account: string
-  account_login: number | null
-  account_label: string
-  mapped: boolean
-  reward_usd: number
-  volume_lots: number
-  orders_count: number
-  record_count: number
-  currency?: string
-  first_reward_date?: string | null
-  last_reward_date?: string | null
-}
-
-interface ExnessByAccountResponse {
-  total: number
-  totals: {
-    reward_usd: number
-    volume_lots: number
-    orders_count: number
-    record_count: number
-  }
-  items: ExnessAccountReward[]
 }
 
 interface AccountMetric {
@@ -138,6 +96,21 @@ interface AccountMetric {
   pnl: number
   commission: number
   finalProfit: number
+}
+
+interface CopyQualityRow {
+  login: number
+  label: string
+  deals: number
+  masterDeals: number
+  dealDiff: number
+  lots: number
+  masterLots: number
+  lotRatio: number | null
+  finalProfit: number
+  masterFinalProfit: number
+  pnlDrift: number
+  status: 'OK' | 'Watch' | 'Check' | 'No Master'
 }
 
 type HealthStatus = 'healthy' | 'warning' | 'critical'
@@ -231,14 +204,6 @@ function fmt(value: number, currency = 'USD'): string {
 
 function fmtPnL(value: number): string {
   return (value >= 0 ? '+' : '') + fmt(value)
-}
-
-
-function fmtNum(value: number, decimals = 2): string {
-  return new Intl.NumberFormat('en-US', {
-    minimumFractionDigits: decimals,
-    maximumFractionDigits: decimals,
-  }).format(value || 0)
 }
 
 
@@ -420,6 +385,37 @@ function inRange(timeStr: string, mode: 'lifetime' | 'range', start: string, end
   return t >= tradingFrom && t <= tradingTo
 }
 
+function getDealFinalProfit(deal: DealRow): number {
+  if (typeof deal.net_profit === 'number') return deal.net_profit
+  return (deal.profit || 0) + (deal.swap || 0) + (deal.commission || 0)
+}
+
+function sumDealLots(deals: DealRow[]): number {
+  return round2(deals.reduce((sum, d) => sum + Number(d.volume || 0), 0))
+}
+
+function sumDealFinalProfit(deals: DealRow[]): number {
+  return round2(deals.reduce((sum, d) => sum + getDealFinalProfit(d), 0))
+}
+
+function getCopyQualityStatus(masterDeals: number, deals: number, lotRatio: number | null): CopyQualityRow['status'] {
+  if (masterDeals === 0) return 'No Master'
+  const coverage = deals / masterDeals
+  const lotOk = lotRatio === null || (lotRatio >= 70 && lotRatio <= 130)
+  if (coverage >= 0.9 && coverage <= 1.1 && lotOk) return 'OK'
+  if (coverage < 0.7 || coverage > 1.3 || (lotRatio !== null && (lotRatio < 50 || lotRatio > 160))) return 'Check'
+  return 'Watch'
+}
+
+function CopyQualityBadge({ status }: { status: CopyQualityRow['status'] }) {
+  const cls =
+    status === 'OK' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+    status === 'Watch' ? 'bg-amber-50 text-amber-700 border-amber-200' :
+    status === 'Check' ? 'bg-red-50 text-red-700 border-red-200' :
+    'bg-slate-50 text-slate-500 border-slate-200'
+  return <span className={'inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ' + cls}>{status}</span>
+}
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function StatCard({ label, value, sub, color }: {
@@ -565,102 +561,6 @@ function TimeBasisInfoBar({ preset, startDate, endDate }: {
         <div className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs text-slate-500">
           <span className="font-semibold text-slate-700">Daily reset:</span> 07:00 GMT+7
         </div>
-      </div>
-    </div>
-  )
-}
-
-
-function ExnessCommissionPanel({
-  accounts, rows, loading, error,
-}: {
-  accounts: Account[]
-  rows: ExnessAccountReward[]
-  loading: boolean
-  error: string | null
-}) {
-  const byLogin = rows.reduce((map, row) => {
-    if (row.account_login !== null && row.account_login !== undefined) {
-      map[String(row.account_login)] = row
-    }
-    return map
-  }, {} as Record<string, ExnessAccountReward>)
-
-  // Luôn render theo đúng thứ tự accounts của Trading Dashboard.
-  // Bảng này cố ý không có cột tài khoản, để từng dòng Commission/Lots
-  // nằm ngang hàng với từng dòng tài khoản ở bảng bên trái.
-  const displayRows = accounts.map(account => {
-    return byLogin[String(account.login)] || {
-      client_account: String(account.login),
-      account_login: account.login,
-      account_label: account.label,
-      mapped: true,
-      reward_usd: 0,
-      volume_lots: 0,
-      orders_count: 0,
-      record_count: 0,
-      currency: 'USD',
-      first_reward_date: null,
-      last_reward_date: null,
-    }
-  })
-
-  const totals = displayRows.reduce(
-    (acc, row) => ({
-      reward_usd: acc.reward_usd + (row.reward_usd || 0),
-      volume_lots: acc.volume_lots + (row.volume_lots || 0),
-      orders_count: acc.orders_count + (row.orders_count || 0),
-      record_count: acc.record_count + (row.record_count || 0),
-    }),
-    { reward_usd: 0, volume_lots: 0, orders_count: 0, record_count: 0 }
-  )
-
-  return (
-    <div className="bg-white rounded-xl border border-slate-200 overflow-hidden h-full">
-      <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
-        <h3 className="font-semibold text-slate-900">Exness Commission</h3>
-        <span className="text-xs text-slate-400">Reward USD / Lots</span>
-      </div>
-
-      {error ? (
-        <div className="mx-5 mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
-          {error}
-        </div>
-      ) : null}
-
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm table-fixed">
-          <thead>
-            <tr className="text-xs text-slate-400 uppercase border-b border-slate-100">
-              <th className="px-6 py-3 text-right">Commission</th>
-              <th className="px-6 py-3 text-right">Lots</th>
-            </tr>
-          </thead>
-          <tbody>
-            {displayRows.length === 0 ? (
-              <tr>
-                <td colSpan={2} className="px-6 py-12 text-center text-slate-400">
-                  Chưa có account để map
-                </td>
-              </tr>
-            ) : displayRows.map(row => (
-              <tr key={row.client_account} className="h-[73px] border-b border-slate-50 hover:bg-slate-50 transition-colors">
-                <td className="px-6 py-4 text-right font-semibold text-emerald-700 align-middle">
-                  {loading ? '...' : fmt(row.reward_usd || 0)}
-                </td>
-                <td className="px-6 py-4 text-right text-slate-700 align-middle">
-                  {loading ? '...' : fmtNum(row.volume_lots || 0, 2)}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-          <tfoot>
-            <tr className="h-[45px] bg-slate-50 font-semibold text-slate-900 border-t border-slate-200">
-              <td className="px-6 py-3 text-right text-emerald-700">{loading ? '...' : fmt(totals.reward_usd)}</td>
-              <td className="px-6 py-3 text-right">{loading ? '...' : fmtNum(totals.volume_lots, 2)}</td>
-            </tr>
-          </tfoot>
-        </table>
       </div>
     </div>
   )
@@ -904,12 +804,6 @@ export default function DashboardPage() {
   const [rawDeals, setRawDeals]     = useState<Record<string, DealRow[]>>({})
   const [tableLoading, setTableLoading] = useState(false)
 
-
-  // Exness Partner Commission add-on — tách riêng, không thay đổi logic trading hiện tại
-  const [exnessRows, setExnessRows] = useState<ExnessAccountReward[]>([])
-  const [exnessLoading, setExnessLoading] = useState(false)
-  const [exnessError, setExnessError] = useState<string | null>(null)
-
   function handlePresetChange(preset: TimelinePreset) {
     setTimelinePreset(preset)
 
@@ -1082,34 +976,6 @@ export default function DashboardPage() {
     if (accounts.length) fetchRawDeals(accounts, startDate, endDate, viewMode)
   }, [accounts, startDate, endDate, viewMode, fetchRawDeals])
 
-
-  const fetchExnessRewards = useCallback(async (start: string, end: string, mode: 'lifetime' | 'range') => {
-    setExnessLoading(true)
-    try {
-      const query = mode === 'lifetime'
-        ? '&days=3650'
-        : '&date_from=' + start + '&date_to=' + end
-
-      const byAccountRes = await fetch(API_URL + '/api/exness/rewards/by-account?api_key=' + API_KEY + query, { cache: 'no-store' })
-
-      if (!byAccountRes.ok) throw new Error('Exness API error')
-
-      const byAccountJson: ExnessByAccountResponse = await byAccountRes.json()
-
-      setExnessRows(byAccountJson.items || [])
-      setExnessError(null)
-    } catch {
-      setExnessError('Chưa tải được Exness commission. Kiểm tra backend hoặc sync collector.')
-      setExnessRows([])
-    } finally {
-      setExnessLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    if (accounts.length) fetchExnessRewards(startDate, endDate, viewMode)
-  }, [accounts, startDate, endDate, viewMode, fetchExnessRewards])
-
   // ─── Derived ─────────────────────────────────────────────────────────────
 
   // Per-account: Net Deposit / Net Withdraw / PNL / Commission — theo viewMode đã chọn
@@ -1168,6 +1034,36 @@ export default function DashboardPage() {
   )
 
   const timelineLabel = getTimelineLabel(timelinePreset, startDate, endDate)
+
+  const masterAccount = accounts.find(a => a.label.toLowerCase().startsWith('master'))
+  const masterDeals = masterAccount ? (rawDeals[masterAccount.label] || []) : []
+  const masterLots = sumDealLots(masterDeals)
+  const masterFinalProfit = sumDealFinalProfit(masterDeals)
+
+  const copyQualityRows: CopyQualityRow[] = accounts
+    .filter(a => !a.label.toLowerCase().startsWith('master'))
+    .map(a => {
+      const deals = rawDeals[a.label] || []
+      const lots = sumDealLots(deals)
+      const finalProfit = sumDealFinalProfit(deals)
+      const lotRatio = masterLots > 0 ? round2((lots / masterLots) * 100) : null
+      const dealDiff = deals.length - masterDeals.length
+      const pnlDrift = round2(finalProfit - masterFinalProfit)
+      return {
+        login: a.login,
+        label: a.label,
+        deals: deals.length,
+        masterDeals: masterDeals.length,
+        dealDiff,
+        lots,
+        masterLots,
+        lotRatio,
+        finalProfit,
+        masterFinalProfit,
+        pnlDrift,
+        status: getCopyQualityStatus(masterDeals.length, deals.length, lotRatio),
+      }
+    })
 
   // Accounts hiển thị trên chart
   const chartLabels =
@@ -1320,8 +1216,8 @@ export default function DashboardPage() {
             endDate={endDate}
           />
 
-          {/* Stat cards — giữ nguyên metric trading hiện tại */}
-          <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-5 gap-4 mb-6">
+          {/* Stat cards — lấy theo Lifetime hoặc khoảng ngày đang chọn */}
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">
             <StatCard
               label="Net Deposit"
               value={tableLoading ? '...' : fmt(metricTotals.netDeposit)}
@@ -1350,9 +1246,8 @@ export default function DashboardPage() {
             />
           </div>
 
-          <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.9fr)] gap-4 items-start">
-            {/* Account table — format cố định: Net Deposit / Net Withdraw / Actual Balance / PNL / Commission / Final Profit */}
-            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+          {/* Account table — format cố định: Net Deposit / Net Withdraw / Actual Balance / PNL / Commission / Final Profit */}
+          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
             <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
               <h3 className="font-semibold text-slate-900">Tài khoản ({accounts.length})</h3>
               <span className="text-xs text-slate-400">
@@ -1460,16 +1355,64 @@ export default function DashboardPage() {
                 </table>
               </div>
             )}
-            </div>
-
-            <ExnessCommissionPanel
-              accounts={accounts}
-              rows={exnessRows}
-              loading={exnessLoading}
-              error={exnessError}
-            />
           </div>
 
+          {/* Copy Quality — aggregate check so sánh copy accounts với Master trong cùng time range */}
+          <div className="mt-6 bg-white rounded-xl border border-slate-200 overflow-hidden">
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+              <div>
+                <h3 className="font-semibold text-slate-900">Copy Quality</h3>
+                <p className="text-xs text-slate-400 mt-1">So sánh aggregate deals/lots/final profit của từng copy account với Master trong cùng time range.</p>
+              </div>
+              <span className="text-xs text-slate-400">{timelineLabel}</span>
+            </div>
+
+            {!masterAccount ? (
+              <div className="px-6 py-8 text-sm text-slate-400">Chưa tìm thấy Master account để so sánh copy quality.</div>
+            ) : copyQualityRows.length === 0 ? (
+              <div className="px-6 py-8 text-sm text-slate-400">Chưa có copy account để so sánh.</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-xs text-slate-400 uppercase border-b border-slate-100">
+                      <th className="px-6 py-3 text-left">Copy Account</th>
+                      <th className="px-6 py-3 text-right">Deals vs Master</th>
+                      <th className="px-6 py-3 text-right">Deal Diff</th>
+                      <th className="px-6 py-3 text-right">Lots vs Master</th>
+                      <th className="px-6 py-3 text-right">Lot Ratio</th>
+                      <th className="px-6 py-3 text-right">Copy Final Profit</th>
+                      <th className="px-6 py-3 text-right">P/L Drift</th>
+                      <th className="px-6 py-3 text-right">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {copyQualityRows.map(row => (
+                      <tr key={row.login} className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
+                        <td className="px-6 py-4">
+                          <p className="font-medium text-slate-900">{row.label}</p>
+                          <p className="text-xs text-slate-400">{row.login}</p>
+                        </td>
+                        <td className="px-6 py-4 text-right text-slate-700">{tableLoading ? '...' : row.deals + ' / ' + row.masterDeals}</td>
+                        <td className={"px-6 py-4 text-right font-semibold " + (row.dealDiff === 0 ? 'text-slate-600' : row.dealDiff > 0 ? 'text-amber-600' : 'text-red-600')}>
+                          {tableLoading ? '...' : (row.dealDiff > 0 ? '+' : '') + row.dealDiff}
+                        </td>
+                        <td className="px-6 py-4 text-right text-slate-700">{tableLoading ? '...' : row.lots.toFixed(2) + ' / ' + row.masterLots.toFixed(2)}</td>
+                        <td className="px-6 py-4 text-right text-slate-700">{tableLoading ? '...' : row.lotRatio === null ? '—' : row.lotRatio.toFixed(1) + '%'}</td>
+                        <td className={"px-6 py-4 text-right font-semibold " + (row.finalProfit >= 0 ? 'text-emerald-600' : 'text-red-600')}>
+                          {tableLoading ? '...' : fmtPnL(row.finalProfit)}
+                        </td>
+                        <td className={"px-6 py-4 text-right font-semibold " + (row.pnlDrift >= 0 ? 'text-emerald-600' : 'text-red-600')}>
+                          {tableLoading ? '...' : fmtPnL(row.pnlDrift)}
+                        </td>
+                        <td className="px-6 py-4 text-right">{tableLoading ? <span className="text-slate-400">...</span> : <CopyQualityBadge status={row.status} />}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </section>
 
         {/* ── PHÂN TÍCH THEO TIMELINE ── */}
