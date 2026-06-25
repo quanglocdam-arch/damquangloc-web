@@ -113,6 +113,64 @@ interface CopyQualityRow {
   status: 'OK' | 'Watch' | 'Check' | 'No Master'
 }
 
+interface LiveCopySummaryRow {
+  account_login: number
+  account_label: string
+  master_open: number
+  copy_open: number
+  matched: number
+  missing: number
+  extra: number
+  duplicate: number
+  volume_mismatch: number
+  price_drift_watch?: number
+  price_drift_critical?: number
+  max_price_drift_points: number | null
+  max_price_drift_symbol: string | null
+  status: 'OK' | 'WATCH' | 'CRITICAL' | 'DATA_ERROR'
+  error_message?: string | null
+}
+
+interface LiveCopyDetailRow {
+  account_login: number
+  account_label: string
+  master_ticket: number | null
+  copy_ticket: number | null
+  symbol: string | null
+  direction: string | null
+  master_volume: number | null
+  copy_volume: number | null
+  master_price_open: number | null
+  copy_price_open: number | null
+  price_drift_points: number | null
+  status: string
+  master_open_time: string | null
+  copy_open_time: string | null
+  copy_comment: string | null
+}
+
+interface LiveCopyIntegrityResponse {
+  ok: boolean
+  mode?: string
+  match_basis?: string
+  latest_snapshot_time?: string | null
+  latest_snapshot_age_minutes?: number | null
+  master?: {
+    account_login: number
+    account_label: string
+    open_positions: number
+    tickets: number[]
+  }
+  thresholds?: {
+    watch_points: number
+    critical_points: number
+    point_size: Record<string, number>
+  }
+  summary: LiveCopySummaryRow[]
+  detail: LiveCopyDetailRow[]
+  error?: string
+}
+
 type HealthStatus = 'healthy' | 'warning' | 'critical'
 
 interface HealthAccountItem {
@@ -407,6 +465,14 @@ function getCopyQualityStatus(masterDeals: number, deals: number, lotRatio: numb
   return 'Watch'
 }
 
+function accountSortLabel(label: string): string {
+  const lower = String(label || '').toLowerCase()
+  if (lower.startsWith('master')) return '000000_master'
+  const m = lower.match(/copy\s*(\d+)/)
+  if (m) return '000001_copy_' + String(Number(m[1])).padStart(6, '0') + '_' + lower
+  return '999999_' + lower
+}
+
 function CopyQualityBadge({ status }: { status: CopyQualityRow['status'] }) {
   const cls =
     status === 'OK' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
@@ -414,6 +480,20 @@ function CopyQualityBadge({ status }: { status: CopyQualityRow['status'] }) {
     status === 'Check' ? 'bg-red-50 text-red-700 border-red-200' :
     'bg-slate-50 text-slate-500 border-slate-200'
   return <span className={'inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ' + cls}>{status}</span>
+}
+
+function LiveCopyStatusBadge({ status }: { status: LiveCopySummaryRow['status'] | string }) {
+  const cls =
+    status === 'OK' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+    status === 'WATCH' || status === 'PRICE_DRIFT_WATCH' ? 'bg-amber-50 text-amber-700 border-amber-200' :
+    status === 'DATA_ERROR' ? 'bg-slate-50 text-slate-600 border-slate-200' :
+    'bg-red-50 text-red-700 border-red-200'
+  return <span className={'inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ' + cls}>{status}</span>
+}
+
+function formatPoints(value: number | null | undefined): string {
+  if (value === null || value === undefined) return '—'
+  return value.toLocaleString('en-US', { maximumFractionDigits: 1 }) + ' pts'
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -804,6 +884,12 @@ export default function DashboardPage() {
   const [rawDeals, setRawDeals]     = useState<Record<string, DealRow[]>>({})
   const [tableLoading, setTableLoading] = useState(false)
 
+  // Live Copy Integrity — open orders monitor, refresh riêng mỗi 60 giây.
+  const [liveCopy, setLiveCopy] = useState<LiveCopyIntegrityResponse | null>(null)
+  const [liveCopyLoading, setLiveCopyLoading] = useState(false)
+  const [liveCopyError, setLiveCopyError] = useState<string | null>(null)
+  const [liveDetailExpanded, setLiveDetailExpanded] = useState(false)
+
   function handlePresetChange(preset: TimelinePreset) {
     setTimelinePreset(preset)
 
@@ -976,6 +1062,29 @@ export default function DashboardPage() {
     if (accounts.length) fetchRawDeals(accounts, startDate, endDate, viewMode)
   }, [accounts, startDate, endDate, viewMode, fetchRawDeals])
 
+  // Live Copy Integrity — đọc open positions current từ backend, không phụ thuộc timeline.
+  const fetchLiveCopyIntegrity = useCallback(async () => {
+    setLiveCopyLoading(true)
+    try {
+      const res = await fetch(API_URL + '/api/copy-integrity/live?api_key=' + API_KEY, { cache: 'no-store' })
+      if (!res.ok) throw new Error('Live copy integrity API error')
+      const data: LiveCopyIntegrityResponse = await res.json()
+      setLiveCopy(data)
+      setLiveCopyError(null)
+    } catch {
+      setLiveCopyError('Không thể tải Live Copy Integrity. Hãy chạy live_positions_collector.py hoặc kiểm tra API.')
+    } finally {
+      setLiveCopyLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (email === undefined || email === null) return
+    fetchLiveCopyIntegrity()
+    const timer = window.setInterval(fetchLiveCopyIntegrity, 60000)
+    return () => window.clearInterval(timer)
+  }, [email, fetchLiveCopyIntegrity])
+
   // ─── Derived ─────────────────────────────────────────────────────────────
 
   // Per-account: Net Deposit / Net Withdraw / PNL / Commission — theo viewMode đã chọn
@@ -1064,6 +1173,16 @@ export default function DashboardPage() {
         status: getCopyQualityStatus(masterDeals.length, deals.length, lotRatio),
       }
     })
+
+
+  const visibleLogins = new Set(accounts.map(a => a.login))
+  const liveSummaryRows = (liveCopy?.summary || [])
+    .filter(row => visibleLogins.has(row.account_login))
+    .sort((a, b) => accountSortLabel(a.account_label).localeCompare(accountSortLabel(b.account_label)))
+  const liveDetailRows = (liveCopy?.detail || [])
+    .filter(row => visibleLogins.has(row.account_login))
+  const liveCriticalCount = liveSummaryRows.filter(r => r.status === 'CRITICAL' || r.status === 'DATA_ERROR').length
+  const liveWatchCount = liveSummaryRows.filter(r => r.status === 'WATCH').length
 
   // Accounts hiển thị trên chart
   const chartLabels =
@@ -1411,6 +1530,127 @@ export default function DashboardPage() {
                   </tbody>
                 </table>
               </div>
+            )}
+          </div>
+
+          {/* Live Copy Integrity — realtime open positions matching by copy_<master_ticket> */}
+          <div className="mt-6 bg-white rounded-xl border border-slate-200 overflow-hidden">
+            <div className="px-6 py-4 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="font-semibold text-slate-900">Live Copy Integrity</h3>
+                <p className="text-xs text-slate-400 mt-1">
+                  Kiểm tra lệnh đang mở theo comment <span className="font-mono">copy_&lt;master_ticket&gt;</span>. Refresh UI mỗi 60 giây.
+                </p>
+              </div>
+              <div className="text-right">
+                <p className="text-xs text-slate-400">
+                  {liveCopyLoading ? 'Đang tải...' : liveCopy?.latest_snapshot_time ? 'Snapshot ' + liveCopy.latest_snapshot_time : 'Chưa có snapshot'}
+                </p>
+                <p className="text-xs text-slate-400 mt-1">
+                  Critical {liveCriticalCount} · Watch {liveWatchCount}
+                </p>
+              </div>
+            </div>
+
+            {liveCopyError ? (
+              <div className="px-6 py-8 text-sm text-red-500">{liveCopyError}</div>
+            ) : !liveCopy || !liveCopy.ok ? (
+              <div className="px-6 py-8 text-sm text-slate-400">
+                {liveCopy?.error || 'Chưa có dữ liệu live copy integrity. Chạy live_positions_collector.py để tạo snapshot đầu tiên.'}
+              </div>
+            ) : liveSummaryRows.length === 0 ? (
+              <div className="px-6 py-8 text-sm text-slate-400">Không có copy account trong dữ liệu live.</div>
+            ) : (
+              <>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-xs text-slate-400 uppercase border-b border-slate-100">
+                        <th className="px-6 py-3 text-left">Copy Account</th>
+                        <th className="px-6 py-3 text-right">Master Open</th>
+                        <th className="px-6 py-3 text-right">Copy Open</th>
+                        <th className="px-6 py-3 text-right">Matched</th>
+                        <th className="px-6 py-3 text-right">Missing</th>
+                        <th className="px-6 py-3 text-right">Extra</th>
+                        <th className="px-6 py-3 text-right">Duplicate</th>
+                        <th className="px-6 py-3 text-right">Volume</th>
+                        <th className="px-6 py-3 text-right">Max Drift</th>
+                        <th className="px-6 py-3 text-right">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {liveSummaryRows.map(row => (
+                        <tr key={row.account_login} className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
+                          <td className="px-6 py-4">
+                            <p className="font-medium text-slate-900">{row.account_label}</p>
+                            <p className="text-xs text-slate-400">{row.account_login}</p>
+                          </td>
+                          <td className="px-6 py-4 text-right text-slate-700">{row.master_open}</td>
+                          <td className="px-6 py-4 text-right text-slate-700">{row.copy_open}</td>
+                          <td className="px-6 py-4 text-right text-slate-700">{row.matched}</td>
+                          <td className={'px-6 py-4 text-right font-semibold ' + (row.missing ? 'text-red-600' : 'text-slate-600')}>{row.missing}</td>
+                          <td className={'px-6 py-4 text-right font-semibold ' + (row.extra ? 'text-red-600' : 'text-slate-600')}>{row.extra}</td>
+                          <td className={'px-6 py-4 text-right font-semibold ' + (row.duplicate ? 'text-red-600' : 'text-slate-600')}>{row.duplicate}</td>
+                          <td className={'px-6 py-4 text-right font-semibold ' + (row.volume_mismatch ? 'text-amber-600' : 'text-slate-600')}>{row.volume_mismatch}</td>
+                          <td className={'px-6 py-4 text-right font-semibold ' + ((row.max_price_drift_points || 0) > (liveCopy.thresholds?.critical_points || 150) ? 'text-red-600' : (row.max_price_drift_points || 0) > (liveCopy.thresholds?.watch_points || 50) ? 'text-amber-600' : 'text-slate-600')}>
+                            {formatPoints(row.max_price_drift_points)}
+                            {row.max_price_drift_symbol ? <span className="ml-1 text-xs text-slate-400">{row.max_price_drift_symbol}</span> : null}
+                          </td>
+                          <td className="px-6 py-4 text-right"><LiveCopyStatusBadge status={row.status} /></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="px-6 py-4 border-t border-slate-100 flex items-center justify-between gap-3">
+                  <p className="text-xs text-slate-400">
+                    Master: {liveCopy.master?.account_label || '—'} · Open {liveCopy.master?.open_positions ?? 0} · Match basis {liveCopy.match_basis || 'copy_<master_ticket>'}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setLiveDetailExpanded(v => !v)}
+                    className="text-xs font-semibold text-slate-600 border border-slate-200 rounded-lg px-3 py-1.5 hover:bg-slate-50"
+                  >
+                    {liveDetailExpanded ? 'Ẩn chi tiết' : 'Xem chi tiết'}
+                  </button>
+                </div>
+
+                {liveDetailExpanded && (
+                  <div className="border-t border-slate-100 overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="text-[11px] text-slate-400 uppercase border-b border-slate-100">
+                          <th className="px-6 py-3 text-left">Account</th>
+                          <th className="px-6 py-3 text-left">Symbol</th>
+                          <th className="px-6 py-3 text-right">Master Ticket</th>
+                          <th className="px-6 py-3 text-right">Copy Ticket</th>
+                          <th className="px-6 py-3 text-right">Master Price</th>
+                          <th className="px-6 py-3 text-right">Copy Price</th>
+                          <th className="px-6 py-3 text-right">Drift</th>
+                          <th className="px-6 py-3 text-right">Lot</th>
+                          <th className="px-6 py-3 text-right">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {liveDetailRows.map((row, idx) => (
+                          <tr key={idx} className="border-b border-slate-50 hover:bg-slate-50">
+                            <td className="px-6 py-3 text-slate-700">{row.account_label}</td>
+                            <td className="px-6 py-3 text-slate-700">{row.symbol || '—'} {row.direction || ''}</td>
+                            <td className="px-6 py-3 text-right text-slate-500">{row.master_ticket || '—'}</td>
+                            <td className="px-6 py-3 text-right text-slate-500">{row.copy_ticket || '—'}</td>
+                            <td className="px-6 py-3 text-right text-slate-700">{row.master_price_open ?? '—'}</td>
+                            <td className="px-6 py-3 text-right text-slate-700">{row.copy_price_open ?? '—'}</td>
+                            <td className="px-6 py-3 text-right text-slate-700">{formatPoints(row.price_drift_points)}</td>
+                            <td className="px-6 py-3 text-right text-slate-700">{row.master_volume ?? '—'} / {row.copy_volume ?? '—'}</td>
+                            <td className="px-6 py-3 text-right"><LiveCopyStatusBadge status={row.status} /></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
             )}
           </div>
         </section>
