@@ -20,6 +20,16 @@ const COLORS: Record<string, string> = {
   Master_Loc:    '#06b6d4',
 }
 
+// Accounts intentionally stopped trading. They remain visible in overview, but are excluded from copy alerts.
+const INACTIVE_ACCOUNT_LOGINS = new Set<number>([128775309])
+const INACTIVE_ACCOUNT_LABELS = new Set<string>(['Copy5_Locloc'])
+
+function isInactiveAccount(login?: number | null, label?: string | null): boolean {
+  if (login !== undefined && login !== null && INACTIVE_ACCOUNT_LOGINS.has(Number(login))) return true
+  if (label && INACTIVE_ACCOUNT_LABELS.has(label)) return true
+  return false
+}
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 interface Account {
@@ -125,9 +135,11 @@ interface LiveCopySummaryRow {
   volume_mismatch: number
   price_drift_watch?: number
   price_drift_critical?: number
+  delayed_count?: number
+  max_copy_delay_minutes?: number | null
   max_price_drift_points: number | null
   max_price_drift_symbol: string | null
-  status: 'OK' | 'WATCH' | 'CRITICAL' | 'DATA_ERROR'
+  status: string
   error_message?: string | null
 }
 
@@ -146,7 +158,9 @@ interface LiveCopyDetailRow {
   status: string
   master_open_time: string | null
   copy_open_time: string | null
+  copy_delay_minutes?: number | null
   copy_comment: string | null
+  reason_hint?: string | null
 }
 
 interface LiveCopyIntegrityResponse {
@@ -164,11 +178,84 @@ interface LiveCopyIntegrityResponse {
   thresholds?: {
     watch_points: number
     critical_points: number
+    delay_watch_minutes?: number
+    delay_critical_minutes?: number
     point_size: Record<string, number>
   }
+  ignored_accounts?: { account_login: number; account_label?: string; reason: string; open_positions_count?: number }[]
   summary: LiveCopySummaryRow[]
   detail: LiveCopyDetailRow[]
   error?: string
+}
+
+interface IntradayTimelinePoint {
+  time: string
+  total_equity: number
+  total_balance: number
+  total_floating: number
+  account_count: number
+}
+
+interface IntradayEquityResponse {
+  ok: boolean
+  hours: number
+  timeline: IntradayTimelinePoint[]
+  stats: Record<string, {
+    start_equity: number
+    latest_equity: number
+    equity_change: number
+    min_equity: number
+    max_equity: number
+    worst_floating: number
+    points: number
+  }>
+}
+
+interface CopyIncidentRow {
+  run_id: string
+  snapshot_time: string
+  account_login: number
+  account_label: string
+  status: string
+  symbol: string | null
+  direction: string | null
+  master_ticket: number | null
+  copy_ticket: number | null
+  price_drift_points: number | null
+  copy_delay_minutes: number | null
+  reason_hint: string
+}
+
+interface CopyIncidentsResponse {
+  ok: boolean
+  days: number
+  run_count: number
+  incident_count: number
+  status_counts: Record<string, number>
+  account_counts: Record<string, number>
+  timeline: { run_id: string; snapshot_time: string; incident_count: number; counts: Record<string, number> }[]
+  incidents: CopyIncidentRow[]
+}
+
+interface DataTableStatus {
+  table: string
+  rows: number
+  min_time?: string | null
+  max_time?: string | null
+  missing?: boolean
+}
+
+interface DataRetentionResponse {
+  ok: boolean
+  updated_at: string
+  collector_frequency: {
+    trading_collector_minutes: number
+    live_positions_collector_minutes: number
+    exness_partner_collector_hours: number
+  }
+  retention_policy: Record<string, string>
+  inactive_accounts: { account_login: number; reason: string }[]
+  tables: DataTableStatus[]
 }
 
 type HealthStatus = 'healthy' | 'warning' | 'critical'
@@ -485,7 +572,7 @@ function CopyQualityBadge({ status }: { status: CopyQualityRow['status'] }) {
 function LiveCopyStatusBadge({ status }: { status: LiveCopySummaryRow['status'] | string }) {
   const cls =
     status === 'OK' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
-    status === 'WATCH' || status === 'PRICE_DRIFT_WATCH' ? 'bg-amber-50 text-amber-700 border-amber-200' :
+    status === 'WATCH' || status === 'PRICE_DRIFT_WATCH' || status === 'DELAYED_COPY' ? 'bg-amber-50 text-amber-700 border-amber-200' :
     status === 'DATA_ERROR' ? 'bg-slate-50 text-slate-600 border-slate-200' :
     'bg-red-50 text-red-700 border-red-200'
   return <span className={'inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ' + cls}>{status}</span>
@@ -494,6 +581,13 @@ function LiveCopyStatusBadge({ status }: { status: LiveCopySummaryRow['status'] 
 function formatPoints(value: number | null | undefined): string {
   if (value === null || value === undefined) return '—'
   return value.toLocaleString('en-US', { maximumFractionDigits: 1 }) + ' pts'
+}
+
+function formatDelay(value: number | null | undefined): string {
+  if (value === null || value === undefined) return '—'
+  if (Math.abs(value) < 1) return '<1m'
+  if (value < 60) return value.toFixed(1) + 'm'
+  return (value / 60).toFixed(1) + 'h'
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -890,6 +984,13 @@ export default function DashboardPage() {
   const [liveCopyError, setLiveCopyError] = useState<string | null>(null)
   const [liveDetailExpanded, setLiveDetailExpanded] = useState(false)
 
+  // Monitoring data — tận dụng account_snapshots và open_positions_history.
+  const [intraday, setIntraday] = useState<IntradayEquityResponse | null>(null)
+  const [copyIncidents, setCopyIncidents] = useState<CopyIncidentsResponse | null>(null)
+  const [dataRetention, setDataRetention] = useState<DataRetentionResponse | null>(null)
+  const [monitorLoading, setMonitorLoading] = useState(false)
+  const [monitorError, setMonitorError] = useState<string | null>(null)
+
   function handlePresetChange(preset: TimelinePreset) {
     setTimelinePreset(preset)
 
@@ -1085,6 +1186,33 @@ export default function DashboardPage() {
     return () => window.clearInterval(timer)
   }, [email, fetchLiveCopyIntegrity])
 
+  const fetchMonitoringData = useCallback(async () => {
+    setMonitorLoading(true)
+    try {
+      const [intradayRes, incidentsRes, retentionRes] = await Promise.all([
+        fetch(API_URL + '/api/intraday-equity?api_key=' + API_KEY + '&hours=24', { cache: 'no-store' }),
+        fetch(API_URL + '/api/copy-integrity/incidents?api_key=' + API_KEY + '&days=2&limit=250', { cache: 'no-store' }),
+        fetch(API_URL + '/api/data-retention/status?api_key=' + API_KEY, { cache: 'no-store' }),
+      ])
+      if (!intradayRes.ok || !incidentsRes.ok || !retentionRes.ok) throw new Error('Monitoring API error')
+      setIntraday(await intradayRes.json())
+      setCopyIncidents(await incidentsRes.json())
+      setDataRetention(await retentionRes.json())
+      setMonitorError(null)
+    } catch {
+      setMonitorError('Không thể tải đủ dữ liệu monitoring. Kiểm tra API phase 14 đã deploy chưa.')
+    } finally {
+      setMonitorLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (email === undefined || email === null) return
+    fetchMonitoringData()
+    const timer = window.setInterval(fetchMonitoringData, 60000)
+    return () => window.clearInterval(timer)
+  }, [email, fetchMonitoringData])
+
   // ─── Derived ─────────────────────────────────────────────────────────────
 
   // Per-account: Net Deposit / Net Withdraw / PNL / Commission — theo viewMode đã chọn
@@ -1150,7 +1278,7 @@ export default function DashboardPage() {
   const masterFinalProfit = sumDealFinalProfit(masterDeals)
 
   const copyQualityRows: CopyQualityRow[] = accounts
-    .filter(a => !a.label.toLowerCase().startsWith('master'))
+    .filter(a => !a.label.toLowerCase().startsWith('master') && !isInactiveAccount(a.login, a.label))
     .map(a => {
       const deals = rawDeals[a.label] || []
       const lots = sumDealLots(deals)
@@ -1177,12 +1305,31 @@ export default function DashboardPage() {
 
   const visibleLogins = new Set(accounts.map(a => a.login))
   const liveSummaryRows = (liveCopy?.summary || [])
-    .filter(row => visibleLogins.has(row.account_login))
+    .filter(row => visibleLogins.has(row.account_login) && !isInactiveAccount(row.account_login, row.account_label))
     .sort((a, b) => accountSortLabel(a.account_label).localeCompare(accountSortLabel(b.account_label)))
   const liveDetailRows = (liveCopy?.detail || [])
-    .filter(row => visibleLogins.has(row.account_login))
+    .filter(row => visibleLogins.has(row.account_login) && !isInactiveAccount(row.account_login, row.account_label))
   const liveCriticalCount = liveSummaryRows.filter(r => r.status === 'CRITICAL' || r.status === 'DATA_ERROR').length
   const liveWatchCount = liveSummaryRows.filter(r => r.status === 'WATCH').length
+  const ignoredLiveAccounts = liveCopy?.ignored_accounts || []
+
+  const visibleIncidentRows = (copyIncidents?.incidents || [])
+    .filter(row => visibleLogins.has(row.account_login) && !isInactiveAccount(row.account_login, row.account_label))
+  const incidentStatusCounts = copyIncidents?.status_counts || {}
+  const incidentTopAccounts = Object.entries(copyIncidents?.account_counts || {})
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 4)
+  const intradayTimeline = (intraday?.timeline || []).slice(-96).map(p => ({
+    time: p.time.slice(11),
+    equity: p.total_equity,
+    floating: p.total_floating,
+    balance: p.total_balance,
+  }))
+  const latestIntraday = intradayTimeline[intradayTimeline.length - 1]
+  const firstIntraday = intradayTimeline[0]
+  const intradayEquityChange = latestIntraday && firstIntraday ? round2(latestIntraday.equity - firstIntraday.equity) : 0
+  const dataTables = dataRetention?.tables || []
+  const findDataTable = (name: string) => dataTables.find(t => t.table === name)
 
   // Accounts hiển thị trên chart
   const chartLabels =
@@ -1575,6 +1722,7 @@ export default function DashboardPage() {
                         <th className="px-6 py-3 text-right">Duplicate</th>
                         <th className="px-6 py-3 text-right">Volume</th>
                         <th className="px-6 py-3 text-right">Max Drift</th>
+                        <th className="px-6 py-3 text-right">Delay</th>
                         <th className="px-6 py-3 text-right">Status</th>
                       </tr>
                     </thead>
@@ -1595,6 +1743,9 @@ export default function DashboardPage() {
                           <td className={'px-6 py-4 text-right font-semibold ' + ((row.max_price_drift_points || 0) > (liveCopy.thresholds?.critical_points || 150) ? 'text-red-600' : (row.max_price_drift_points || 0) > (liveCopy.thresholds?.watch_points || 50) ? 'text-amber-600' : 'text-slate-600')}>
                             {formatPoints(row.max_price_drift_points)}
                             {row.max_price_drift_symbol ? <span className="ml-1 text-xs text-slate-400">{row.max_price_drift_symbol}</span> : null}
+                          </td>
+                          <td className={'px-6 py-4 text-right font-semibold ' + ((row.max_copy_delay_minutes || 0) > (liveCopy.thresholds?.delay_critical_minutes || 60) ? 'text-red-600' : (row.max_copy_delay_minutes || 0) > (liveCopy.thresholds?.delay_watch_minutes || 5) ? 'text-amber-600' : 'text-slate-600')}>
+                            {formatDelay(row.max_copy_delay_minutes)}
                           </td>
                           <td className="px-6 py-4 text-right"><LiveCopyStatusBadge status={row.status} /></td>
                         </tr>
@@ -1628,6 +1779,7 @@ export default function DashboardPage() {
                           <th className="px-6 py-3 text-right">Master Price</th>
                           <th className="px-6 py-3 text-right">Copy Price</th>
                           <th className="px-6 py-3 text-right">Drift</th>
+                          <th className="px-6 py-3 text-right">Delay</th>
                           <th className="px-6 py-3 text-right">Lot</th>
                           <th className="px-6 py-3 text-right">Status</th>
                         </tr>
@@ -1642,6 +1794,7 @@ export default function DashboardPage() {
                             <td className="px-6 py-3 text-right text-slate-700">{row.master_price_open ?? '—'}</td>
                             <td className="px-6 py-3 text-right text-slate-700">{row.copy_price_open ?? '—'}</td>
                             <td className="px-6 py-3 text-right text-slate-700">{formatPoints(row.price_drift_points)}</td>
+                            <td className="px-6 py-3 text-right text-slate-700">{formatDelay(row.copy_delay_minutes)}</td>
                             <td className="px-6 py-3 text-right text-slate-700">{row.master_volume ?? '—'} / {row.copy_volume ?? '—'}</td>
                             <td className="px-6 py-3 text-right"><LiveCopyStatusBadge status={row.status} /></td>
                           </tr>
@@ -1652,6 +1805,149 @@ export default function DashboardPage() {
                 )}
               </>
             )}
+          </div>
+        </section>
+
+        {/* ── MONITORING / HISTORY / DATA USAGE ── */}
+        <section className="mt-8">
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+            <div>
+              <h2 className="text-xl font-semibold text-slate-900">Monitoring 15 phút</h2>
+              <p className="text-sm text-slate-400 mt-1">
+                Tận dụng account snapshots và open positions history để soi intraday, lỗi copy lịch sử và dung lượng DB.
+              </p>
+            </div>
+            <div className="text-xs text-slate-400">
+              {monitorLoading ? 'Đang tải monitoring...' : dataRetention?.updated_at ? 'Updated ' + dataRetention.updated_at : '—'}
+            </div>
+          </div>
+
+          {monitorError && (
+            <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+              {monitorError}
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+            <StatCard label="Intraday Equity" value={latestIntraday ? fmt(latestIntraday.equity) : '—'} sub={(intradayEquityChange >= 0 ? '+' : '') + fmtPnL(intradayEquityChange) + ' trong 24h'} />
+            <StatCard label="Floating hiện tại" value={latestIntraday ? fmtPnL(latestIntraday.floating) : '—'} sub="Tổng active accounts" />
+            <StatCard label="Copy Incidents 48h" value={(copyIncidents?.incident_count || 0).toLocaleString('en-US')} sub={'Runs: ' + (copyIncidents?.run_count || 0)} />
+            <StatCard label="Open History Rows" value={(findDataTable('open_positions_history')?.rows || 0).toLocaleString('en-US')} sub="Retention đề xuất: 90 ngày" />
+          </div>
+
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+            <div className="bg-white rounded-xl border border-slate-200 p-6">
+              <div className="flex items-start justify-between gap-3 mb-4">
+                <div>
+                  <h3 className="font-semibold text-slate-900">Intraday Equity / Floating</h3>
+                  <p className="text-xs text-slate-400 mt-1">Dữ liệu lấy từ account_snapshots, cập nhật theo collector 15 phút.</p>
+                </div>
+                <span className="text-xs text-slate-400">24h</span>
+              </div>
+              {intradayTimeline.length < 2 ? (
+                <div className="h-[260px] flex items-center justify-center text-sm text-slate-400">Chưa đủ snapshot 15 phút để vẽ chart.</div>
+              ) : (
+                <div className="h-[260px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={intradayTimeline} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                      <XAxis dataKey="time" tick={{ fontSize: 11, fill: '#94a3b8' }} />
+                      <YAxis tick={{ fontSize: 11, fill: '#94a3b8' }} width={70} />
+                      <Tooltip formatter={(value: number) => fmt(Number(value))} />
+                      <Legend />
+                      <Line type="monotone" dataKey="equity" name="Total Equity" stroke="#0f172a" strokeWidth={2} dot={false} />
+                      <Line type="monotone" dataKey="floating" name="Floating PNL" stroke="#f97316" strokeWidth={2} dot={false} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+            </div>
+
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+              <div className="px-6 py-4 border-b border-slate-100 flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="font-semibold text-slate-900">Copy Incident History</h3>
+                  <p className="text-xs text-slate-400 mt-1">Soi missing / extra / duplicate / drift / delayed trong 48 giờ gần nhất.</p>
+                </div>
+                <div className="text-right text-xs text-slate-400">
+                  {Object.entries(incidentStatusCounts).slice(0, 3).map(([k, v]) => (
+                    <p key={k}>{k}: {v}</p>
+                  ))}
+                </div>
+              </div>
+              {visibleIncidentRows.length === 0 ? (
+                <div className="px-6 py-8 text-sm text-slate-400">Chưa có incident trong 48 giờ gần nhất, hoặc history chưa đủ dữ liệu.</div>
+              ) : (
+                <div className="max-h-[320px] overflow-auto">
+                  <table className="w-full text-xs">
+                    <thead className="sticky top-0 bg-white">
+                      <tr className="text-[11px] text-slate-400 uppercase border-b border-slate-100">
+                        <th className="px-4 py-3 text-left">Time</th>
+                        <th className="px-4 py-3 text-left">Account</th>
+                        <th className="px-4 py-3 text-left">Order</th>
+                        <th className="px-4 py-3 text-right">Drift</th>
+                        <th className="px-4 py-3 text-right">Delay</th>
+                        <th className="px-4 py-3 text-right">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {visibleIncidentRows.slice(0, 80).map((row, idx) => (
+                        <tr key={idx} className="border-b border-slate-50 hover:bg-slate-50">
+                          <td className="px-4 py-3 text-slate-500 whitespace-nowrap">{formatDateTimeShort(row.snapshot_time)}</td>
+                          <td className="px-4 py-3 text-slate-700 whitespace-nowrap">{row.account_label}</td>
+                          <td className="px-4 py-3 text-slate-600">
+                            <p>{row.symbol || '—'} {row.direction || ''}</p>
+                            <p className="text-[11px] text-slate-400">M: {row.master_ticket || '—'} · C: {row.copy_ticket || '—'}</p>
+                          </td>
+                          <td className="px-4 py-3 text-right text-slate-700">{formatPoints(row.price_drift_points)}</td>
+                          <td className="px-4 py-3 text-right text-slate-700">{formatDelay(row.copy_delay_minutes)}</td>
+                          <td className="px-4 py-3 text-right"><LiveCopyStatusBadge status={row.status} /></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {incidentTopAccounts.length > 0 && (
+                <div className="px-6 py-3 border-t border-slate-100 text-xs text-slate-400">
+                  Top accounts: {incidentTopAccounts.map(([label, count]) => label + ' (' + count + ')').join(' · ')}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="mt-6 bg-white rounded-xl border border-slate-200 overflow-hidden">
+            <div className="px-6 py-4 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="font-semibold text-slate-900">Data Usage / Retention</h3>
+                <p className="text-xs text-slate-400 mt-1">Kiểm tra bảng nào đang tăng nhanh và retention policy hiện tại.</p>
+              </div>
+              <p className="text-xs text-slate-400">
+                Trading 15m · Live 15m · Exness 6h · Ignored: {ignoredLiveAccounts.map(a => a.account_label || a.account_login).join(', ') || '—'}
+              </p>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-xs text-slate-400 uppercase border-b border-slate-100">
+                    <th className="px-6 py-3 text-left">Table</th>
+                    <th className="px-6 py-3 text-right">Rows</th>
+                    <th className="px-6 py-3 text-left">Range</th>
+                    <th className="px-6 py-3 text-left">Retention</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {dataTables.map(t => (
+                    <tr key={t.table} className="border-b border-slate-50 hover:bg-slate-50">
+                      <td className="px-6 py-3 font-medium text-slate-800">{t.table}</td>
+                      <td className="px-6 py-3 text-right text-slate-700">{t.rows.toLocaleString('en-US')}</td>
+                      <td className="px-6 py-3 text-slate-500">{t.min_time || '—'} → {t.max_time || '—'}</td>
+                      <td className="px-6 py-3 text-slate-500">{dataRetention?.retention_policy?.[t.table] || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         </section>
 
