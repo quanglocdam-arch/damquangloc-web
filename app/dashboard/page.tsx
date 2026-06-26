@@ -1930,7 +1930,7 @@ export default function DashboardPage() {
                       <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                       <XAxis dataKey="time" tick={{ fontSize: 11, fill: '#94a3b8' }} />
                       <YAxis tick={{ fontSize: 11, fill: '#94a3b8' }} width={70} />
-                      <Tooltip formatter={(value: number) => fmt(Number(value))} />
+                      <Tooltip formatter={(value: any) => fmt(Number(value ?? 0))} />
                       <Legend />
                       <Line type="monotone" dataKey="equity" name="Total Equity" stroke="#0f172a" strokeWidth={2} dot={false} />
                       <Line type="monotone" dataKey="floating" name="Floating PNL" stroke="#f97316" strokeWidth={2} dot={false} />
