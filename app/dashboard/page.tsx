@@ -258,6 +258,59 @@ interface DataRetentionResponse {
   tables: DataTableStatus[]
 }
 
+interface RiskGuardStateRow {
+  account_login: number
+  account_label: string
+  status: 'ACTIVE' | 'LOCKED' | 'MISSING_STATE' | 'STALE_STATE' | 'STATE_ERROR' | 'INACTIVE' | string
+  severity: 'ok' | 'warning' | 'critical' | 'neutral' | string
+  reason: string
+  trading_day: string | null
+  current_trading_day: string
+  start_balance: number | null
+  peak_balance: number | null
+  base_balance: number | null
+  stop_balance: number | null
+  current_balance: number | null
+  current_equity: number | null
+  dd_from_peak_percent: number | null
+  distance_to_stop: number | null
+  big_loss_count: number | null
+  big_loss_limit: number
+  locked: boolean
+  lock_reason: string
+  state_file_exists: boolean
+  state_file_name: string
+  state_file_mtime: string | null
+  snapshot_time: string | null
+  is_small_account: boolean | null
+  inactive: boolean
+}
+
+interface RiskGuardResponse {
+  ok: boolean
+  updated_at: string
+  current_trading_day: string
+  common_files_dir: string
+  rules: {
+    trading_day_reset: string
+    daily_trailing_dd_percent: number
+    small_account_max_balance: number
+    big_loss_percent: number
+    big_loss_streak_limit: number
+    lock_action: string
+  }
+  summary: {
+    total_accounts: number
+    active: number
+    locked: number
+    warnings: number
+    inactive: number
+    counts: Record<string, number>
+    severity_counts: Record<string, number>
+  }
+  states: RiskGuardStateRow[]
+}
+
 type HealthStatus = 'healthy' | 'warning' | 'critical'
 
 interface HealthAccountItem {
@@ -576,6 +629,21 @@ function LiveCopyStatusBadge({ status }: { status: LiveCopySummaryRow['status'] 
     status === 'DATA_ERROR' ? 'bg-slate-50 text-slate-600 border-slate-200' :
     'bg-red-50 text-red-700 border-red-200'
   return <span className={'inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ' + cls}>{status}</span>
+}
+
+function RiskGuardBadge({ status }: { status: string }) {
+  const cls =
+    status === 'ACTIVE' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+    status === 'LOCKED' ? 'bg-red-50 text-red-700 border-red-200' :
+    status === 'INACTIVE' ? 'bg-slate-50 text-slate-500 border-slate-200' :
+    status === 'MISSING_STATE' || status === 'STALE_STATE' ? 'bg-amber-50 text-amber-700 border-amber-200' :
+    'bg-red-50 text-red-700 border-red-200'
+  return <span className={'inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ' + cls}>{status}</span>
+}
+
+function formatPercent(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return '—'
+  return value.toFixed(2) + '%'
 }
 
 function formatPoints(value: number | null | undefined): string {
@@ -988,6 +1056,7 @@ export default function DashboardPage() {
   const [intraday, setIntraday] = useState<IntradayEquityResponse | null>(null)
   const [copyIncidents, setCopyIncidents] = useState<CopyIncidentsResponse | null>(null)
   const [dataRetention, setDataRetention] = useState<DataRetentionResponse | null>(null)
+  const [riskGuard, setRiskGuard] = useState<RiskGuardResponse | null>(null)
   const [monitorLoading, setMonitorLoading] = useState(false)
   const [monitorError, setMonitorError] = useState<string | null>(null)
 
@@ -1189,15 +1258,17 @@ export default function DashboardPage() {
   const fetchMonitoringData = useCallback(async () => {
     setMonitorLoading(true)
     try {
-      const [intradayRes, incidentsRes, retentionRes] = await Promise.all([
+      const [intradayRes, incidentsRes, retentionRes, riskGuardRes] = await Promise.all([
         fetch(API_URL + '/api/intraday-equity?api_key=' + API_KEY + '&hours=24', { cache: 'no-store' }),
         fetch(API_URL + '/api/copy-integrity/incidents?api_key=' + API_KEY + '&days=2&limit=250', { cache: 'no-store' }),
         fetch(API_URL + '/api/data-retention/status?api_key=' + API_KEY, { cache: 'no-store' }),
+        fetch(API_URL + '/api/riskguard/states?api_key=' + API_KEY, { cache: 'no-store' }),
       ])
-      if (!intradayRes.ok || !incidentsRes.ok || !retentionRes.ok) throw new Error('Monitoring API error')
+      if (!intradayRes.ok || !incidentsRes.ok || !retentionRes.ok || !riskGuardRes.ok) throw new Error('Monitoring API error')
       setIntraday(await intradayRes.json())
       setCopyIncidents(await incidentsRes.json())
       setDataRetention(await retentionRes.json())
+      setRiskGuard(await riskGuardRes.json())
       setMonitorError(null)
     } catch {
       setMonitorError('Không thể tải đủ dữ liệu monitoring. Kiểm tra API phase 14 đã deploy chưa.')
@@ -1330,6 +1401,11 @@ export default function DashboardPage() {
   const intradayEquityChange = latestIntraday && firstIntraday ? round2(latestIntraday.equity - firstIntraday.equity) : 0
   const dataTables = dataRetention?.tables || []
   const findDataTable = (name: string) => dataTables.find(t => t.table === name)
+  const riskGuardRows = (riskGuard?.states || [])
+    .filter(row => visibleLogins.has(row.account_login) || row.status === 'INACTIVE')
+    .sort((a, b) => accountSortLabel(a.account_label).localeCompare(accountSortLabel(b.account_label)))
+  const riskGuardLockedCount = riskGuardRows.filter(r => r.status === 'LOCKED').length
+  const riskGuardWarningCount = riskGuardRows.filter(r => ['MISSING_STATE', 'STALE_STATE', 'STATE_ERROR'].includes(r.status)).length
 
   // Accounts hiển thị trên chart
   const chartLabels =
@@ -1828,9 +1904,10 @@ export default function DashboardPage() {
             </div>
           )}
 
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">
             <StatCard label="Intraday Equity" value={latestIntraday ? fmt(latestIntraday.equity) : '—'} sub={(intradayEquityChange >= 0 ? '+' : '') + fmtPnL(intradayEquityChange) + ' trong 24h'} />
             <StatCard label="Floating hiện tại" value={latestIntraday ? fmtPnL(latestIntraday.floating) : '—'} sub="Tổng active accounts" />
+            <StatCard label="RiskGuard Locked" value={String(riskGuardLockedCount)} sub={'Active: ' + (riskGuard?.summary?.active ?? 0) + ' · Warn: ' + riskGuardWarningCount} color={riskGuardLockedCount > 0 ? 'red' : 'green'} />
             <StatCard label="Copy Incidents 48h" value={(copyIncidents?.incident_count || 0).toLocaleString('en-US')} sub={'Runs: ' + (copyIncidents?.run_count || 0)} />
             <StatCard label="Open History Rows" value={(findDataTable('open_positions_history')?.rows || 0).toLocaleString('en-US')} sub="Retention đề xuất: 90 ngày" />
           </div>
@@ -1861,6 +1938,71 @@ export default function DashboardPage() {
                   </ResponsiveContainer>
                 </div>
               )}
+            </div>
+
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+              <div className="px-6 py-4 border-b border-slate-100 flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="font-semibold text-slate-900">RiskGuard Entry Lock</h3>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Đọc state file từ EA CopySlave để biết account nào ACTIVE / LOCKED. Lock chỉ chặn lệnh mới, không cắt lệnh đang mở.
+                  </p>
+                </div>
+                <div className="text-right text-xs text-slate-400">
+                  <p>Day: {riskGuard?.current_trading_day || '—'}</p>
+                  <p>Locked: {riskGuardLockedCount} · Warning: {riskGuardWarningCount}</p>
+                </div>
+              </div>
+
+              {!riskGuard || !riskGuard.ok ? (
+                <div className="px-6 py-8 text-sm text-slate-400">Chưa có dữ liệu RiskGuard. Deploy API phase 15 và attach EA mới trên các Copy terminal.</div>
+              ) : riskGuardRows.length === 0 ? (
+                <div className="px-6 py-8 text-sm text-slate-400">Không có copy account để hiển thị RiskGuard.</div>
+              ) : (
+                <div className="max-h-[360px] overflow-auto">
+                  <table className="w-full text-xs">
+                    <thead className="sticky top-0 bg-white">
+                      <tr className="text-[11px] text-slate-400 uppercase border-b border-slate-100">
+                        <th className="px-4 py-3 text-left">Account</th>
+                        <th className="px-4 py-3 text-right">Start</th>
+                        <th className="px-4 py-3 text-right">Peak</th>
+                        <th className="px-4 py-3 text-right">Current</th>
+                        <th className="px-4 py-3 text-right">Stop</th>
+                        <th className="px-4 py-3 text-right">DD</th>
+                        <th className="px-4 py-3 text-right">Big Loss</th>
+                        <th className="px-4 py-3 text-right">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {riskGuardRows.map(row => (
+                        <tr key={row.account_login} className="border-b border-slate-50 hover:bg-slate-50">
+                          <td className="px-4 py-3 text-slate-700">
+                            <p className="font-medium text-slate-900">{row.account_label}</p>
+                            <p className="text-[11px] text-slate-400">{row.account_login} · {row.state_file_mtime ? 'State ' + formatDateTimeShort(row.state_file_mtime) : row.state_file_exists ? 'State file found' : 'No state file'}</p>
+                            {row.reason && row.status !== 'ACTIVE' && <p className="mt-1 max-w-[280px] text-[11px] text-slate-500">{row.reason}</p>}
+                          </td>
+                          <td className="px-4 py-3 text-right text-slate-700">{row.start_balance === null ? '—' : fmt(row.start_balance)}</td>
+                          <td className="px-4 py-3 text-right text-slate-700">{row.peak_balance === null ? '—' : fmt(row.peak_balance)}</td>
+                          <td className="px-4 py-3 text-right text-slate-700">{row.current_balance === null ? '—' : fmt(row.current_balance)}</td>
+                          <td className="px-4 py-3 text-right text-slate-700">{row.stop_balance === null ? '—' : fmt(row.stop_balance)}</td>
+                          <td className={'px-4 py-3 text-right font-semibold ' + ((row.dd_from_peak_percent || 0) <= -3 ? 'text-red-600' : (row.dd_from_peak_percent || 0) < 0 ? 'text-amber-600' : 'text-emerald-600')}>
+                            {formatPercent(row.dd_from_peak_percent)}
+                            {row.distance_to_stop !== null && row.distance_to_stop !== undefined ? <p className="text-[11px] text-slate-400">to stop {fmtPnL(row.distance_to_stop)}</p> : null}
+                          </td>
+                          <td className="px-4 py-3 text-right text-slate-700">
+                            {row.big_loss_count === null ? '—' : row.big_loss_count + ' / ' + row.big_loss_limit}
+                            {row.is_small_account ? <p className="text-[11px] text-slate-400">small</p> : null}
+                          </td>
+                          <td className="px-4 py-3 text-right"><RiskGuardBadge status={row.status} /></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              <div className="px-6 py-3 border-t border-slate-100 text-xs text-slate-400">
+                Rule: DD trailing {riskGuard?.rules?.daily_trailing_dd_percent ?? 3}% · Small ≤ ${riskGuard?.rules?.small_account_max_balance ?? 500} · Big loss {riskGuard?.rules?.big_loss_streak_limit ?? 2} lần liên tiếp. Path: {riskGuard?.common_files_dir || '—'}
+              </div>
             </div>
 
             <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
