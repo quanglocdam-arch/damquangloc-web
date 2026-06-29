@@ -1,15 +1,23 @@
 export type ModuleStatus = "Active" | "Building" | "Coming soon";
+export type ModuleCategory = "Working" | "Workout" | "Sharing";
 
 export type SiteModule = {
   title: string;
   description: string;
   href: string;
   status: ModuleStatus;
-  category: "Working" | "Workout" | "Sharing";
+  category: ModuleCategory;
   eyebrow?: string;
 };
 
-export const siteSections = [
+export type SiteSection = {
+  title: ModuleCategory;
+  href: string;
+  description: string;
+  modules: SiteModule[];
+};
+
+export const siteSections: SiteSection[] = [
   {
     title: "Working",
     href: "/working",
@@ -63,6 +71,6 @@ export const siteSections = [
       },
     ],
   },
-] as const;
+];
 
 export const allModules: SiteModule[] = siteSections.flatMap((section) => section.modules);
