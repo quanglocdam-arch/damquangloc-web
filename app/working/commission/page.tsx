@@ -1,24 +1,16 @@
-import Link from "next/link";
-import { AppHeader } from "@/components/site/AppHeader";
-import { AppShell } from "@/components/site/AppShell";
-import { PlaceholderPanel } from "@/components/site/PlaceholderPanel";
-import styles from "@/components/site/AppShell.module.css";
+import { AppHeader } from '@/components/site/AppHeader';
+import { AppShell } from '@/components/site/AppShell';
+import { Mt5Dashboard } from '@/components/dashboards/mt5/Mt5Dashboard';
 
-export default function CommissionDashboardPage() {
+export default function CommissionPage() {
   return (
     <AppShell>
       <AppHeader
         kicker="Working / Commission"
         title="Commission Dashboard"
-        description="A separated area for partner commission, payout, and revenue-share reporting. This keeps commission data out of the MT5 trading performance dashboard."
-        action={<Link className={styles.actionLink} href="/working">Back to Working</Link>}
+        description="Dedicated view for commission tracking by account and symbol. Data is derived from closed MT5 deals."
       />
-
-      <PlaceholderPanel title="Commission dashboard placeholder">
-        <p>
-          This page is ready for the future commission module. Suggested focus: lifetime commission, date-range commission, partner payout, and reconciliation status.
-        </p>
-      </PlaceholderPanel>
+      <Mt5Dashboard mode="commission" />
     </AppShell>
   );
 }

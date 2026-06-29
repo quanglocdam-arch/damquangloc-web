@@ -1,24 +1,16 @@
-import Link from "next/link";
-import { AppHeader } from "@/components/site/AppHeader";
-import { AppShell } from "@/components/site/AppShell";
-import { PlaceholderPanel } from "@/components/site/PlaceholderPanel";
-import styles from "@/components/site/AppShell.module.css";
+import { AppHeader } from '@/components/site/AppHeader';
+import { AppShell } from '@/components/site/AppShell';
+import { Mt5Dashboard } from '@/components/dashboards/mt5/Mt5Dashboard';
 
-export default function MT5DashboardPage() {
+export default function Mt5Page() {
   return (
     <AppShell>
       <AppHeader
         kicker="Working / Trading"
         title="MT5 Trading Dashboard"
-        description="This route is reserved for the MT5 trading performance dashboard. Existing MT5 UI can be moved into this page without mixing it with Strava or blog content."
-        action={<Link className={styles.actionLink} href="/working">Back to Working</Link>}
+        description="Trading performance, account health, latest deals, and copy-trade monitoring from the live MT5 API."
       />
-
-      <PlaceholderPanel title="Move current MT5 dashboard here">
-        <p>
-          Recommended final route: <strong>/working/mt5</strong>. Keep this page focused on trading performance, account balance, PNL, copy integrity, and health checks.
-        </p>
-      </PlaceholderPanel>
+      <Mt5Dashboard mode="trading" />
     </AppShell>
   );
 }

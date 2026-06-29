@@ -21,7 +21,7 @@ export const siteSections: SiteSection[] = [
   {
     title: "Working",
     href: "/working",
-    description: "Trading dashboards, commission tracking, and business workspaces.",
+    description: "Trading dashboards, commission tracking, finance views, and business workspaces.",
     modules: [
       {
         title: "MT5 Trading Dashboard",
@@ -35,6 +35,14 @@ export const siteSections: SiteSection[] = [
         title: "Commission Dashboard",
         description: "Separate dashboard for partner commission and payout tracking.",
         href: "/working/commission",
+        status: "Active",
+        category: "Working",
+        eyebrow: "Commission",
+      },
+      {
+        title: "Finance Dashboard",
+        description: "Balance, equity, PNL, commission, and final profit by account and symbol.",
+        href: "/working/finance",
         status: "Building",
         category: "Working",
         eyebrow: "Finance",
