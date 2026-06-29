@@ -1,27 +1,19 @@
 export type ModuleStatus = "Active" | "Building" | "Coming soon";
-export type ModuleCategory = "Working" | "Workout" | "Sharing";
 
 export type SiteModule = {
   title: string;
   description: string;
   href: string;
   status: ModuleStatus;
-  category: ModuleCategory;
+  category: "Working" | "Workout" | "Sharing";
   eyebrow?: string;
 };
 
-export type SiteSection = {
-  title: ModuleCategory;
-  href: string;
-  description: string;
-  modules: SiteModule[];
-};
-
-export const siteSections: SiteSection[] = [
+export const siteSections = [
   {
     title: "Working",
     href: "/working",
-    description: "Trading dashboards, commission tracking, finance views, and business workspaces.",
+    description: "Trading dashboards, commission tracking, and business workspaces.",
     modules: [
       {
         title: "MT5 Trading Dashboard",
@@ -35,14 +27,6 @@ export const siteSections: SiteSection[] = [
         title: "Commission Dashboard",
         description: "Separate dashboard for partner commission and payout tracking.",
         href: "/working/commission",
-        status: "Active",
-        category: "Working",
-        eyebrow: "Commission",
-      },
-      {
-        title: "Finance Dashboard",
-        description: "Balance, equity, PNL, commission, and final profit by account and symbol.",
-        href: "/working/finance",
         status: "Building",
         category: "Working",
         eyebrow: "Finance",
@@ -79,6 +63,6 @@ export const siteSections: SiteSection[] = [
       },
     ],
   },
-];
+] as const;
 
 export const allModules: SiteModule[] = siteSections.flatMap((section) => section.modules);
