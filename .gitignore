@@ -39,3 +39,16 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+# Local backup
+
+app/page.backup.tsx
+
+# Running dashboard backend local files
+strava_running_dashboard_backend/.venv/
+strava_running_dashboard_backend/running.db
+strava_running_dashboard_backend/running.db-shm
+strava_running_dashboard_backend/running.db-wal
+strava_running_dashboard_backend/.env
+strava_running_dashboard_backend/logs/
+strava_running_dashboard_backend/__pycache__/
+
