@@ -52,3 +52,13 @@ strava_running_dashboard_backend/.env
 strava_running_dashboard_backend/logs/
 strava_running_dashboard_backend/__pycache__/
 
+
+# OpenNext
+.open-next
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+
+!.env.example
